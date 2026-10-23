@@ -51,7 +51,7 @@ export function formatEvent(event, p) {
   const actor = line(p.sender?.login || 'GitHub', 80);
   const actorLabel = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)
     ? href(actor, `https://github.com/${actor}`) : md(actor);
-  const metadata = `${href(p.repository.full_name, repoUrl)} · ${actorLabel}`;
+  const project = `*${href(p.repository.full_name.split('/')[1], repoUrl)}*`;
   let category;
   let title;
   let subject = '';
@@ -74,7 +74,7 @@ export function formatEvent(event, p) {
         const shortId = line(c.id, 80).slice(0, 7).replace(/[\uD800-\uDBFF]$/, '');
         const prefix = `• ${href(shortId || 'commit', commitUrl)} `;
         // Reserve space for the omitted-count line, even with unusually long URLs.
-        const budget = MAX_MESSAGE - title.length - metadata.length - details.length - prefix.length - 80;
+        const budget = MAX_MESSAGE - project.length - title.length - actorLabel.length - details.length - prefix.length - 80;
         if (budget < 40) break;
         const message = line(typeof c.message === 'string' ? c.message.split('\n')[0] : '', 180);
         details += `${prefix}${fit(message, budget, md)}\n`;
@@ -138,7 +138,7 @@ export function formatEvent(event, p) {
       category = 'forks'; title = linkedTitle('🍴', 'Fork', p.forkee?.html_url, ''); break;
     default: return null;
   }
-  let text = `${title}\n${metadata}`;
+  let text = `${project}\n${title} · ${actorLabel}`;
   if (subject) text += `\n\n${subject}`;
   if (details.trim()) text += `\n\n${details.trim()}`;
   if (body.trim()) text += `\n\n${fit(body.trim(), MAX_MESSAGE - text.length - 2, quote)}`;

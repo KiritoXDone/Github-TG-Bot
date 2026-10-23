@@ -45,8 +45,8 @@ test('release layout uses a linked version, bold name and quoted body with no st
     html_url: `${repository.html_url}/releases/tag/v1.2.3`,
   } }));
   assert.equal(release.text, [
-    '🚀 *Release* · published',
-    '[KiritoXDone/Github\\-TG\\-Bot](https://github.com/kiritoxdone/github-tg-bot) · [octocat](https://github.com/octocat)',
+    '*[Github\\-TG\\-Bot](https://github.com/kiritoxdone/github-tg-bot)*',
+    '🚀 *Release* · published · [octocat](https://github.com/octocat)',
     '',
     '*[v1\\.2\\.3](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1.2.3)* · *Spring update*',
     '', '>Fix startup', '>Improve performance',
@@ -70,7 +70,7 @@ test('escapes untrusted Markdown and URL parentheses without allowing injected f
     body: '_ * [ ] ( ) ~ ` > # + - = | { } . ! \\',
     html_url: 'https://github.com/a/b/issues/1?label=(bug)',
   } }));
-  assert.ok(event.text.startsWith('📝 *[Issue \\#1](https://github.com/a/b/issues/1?label=(bug\\))*'));
+  assert.ok(event.text.includes('\n📝 *[Issue \\#1](https://github.com/a/b/issues/1?label=(bug\\))*'));
   assert.ok(event.text.includes('*\\*boom\\* \\[click\\]\\(https://evil\\.example\\)*'));
   assert.ok(event.text.endsWith('>\\_ \\* \\[ \\] \\( \\) \\~ \\` \\> \\# \\+ \\- \\= \\| \\{ \\} \\. \\! \\\\'));
   for (const target of ['javascript:alert(1)', 'https://evil.example/x', 'https://github.com@evil.example/x', 'https://user:pass@github.com/a/b', `https://github.com/${'a'.repeat(700)}`]) {
