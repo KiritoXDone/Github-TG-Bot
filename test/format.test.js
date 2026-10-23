@@ -24,19 +24,21 @@ test('normalizes repository names and rejects URLs or SQL-shaped input', () => {
 test('distinguishes merged PRs from closed PRs', () => {
   const event = formatEvent('pull_request', payload({ action: 'closed', pull_request: { number: 7, title: 'Feature', merged: true } }));
   assert.equal(event.category, 'pr');
-  assert.match(event.text, /merged/);
+  assert.match(event.messages[0], /merged/);
 });
 
 test('limits large push and release messages without cutting inline links or Markdown entities', () => {
   const push = formatEvent('push', payload({ ref: 'refs/heads/main', forced: true, commits: Array.from({ length: 20 }, () => ({ id: 'abcdef123', message: 'new commit' })) }));
-  assert.match(push.text, /另有 12/);
-  assert.match(push.text, /Force push/);
+  assert.equal(push.messages.join('\n').match(/• /g).length, 20);
+  assert.ok(push.messages.every(message => message.length <= 3900));
+  assert.doesNotMatch(push.messages.join('\n'), /另有/);
+  assert.match(push.messages[0], /Force push/);
   const release = formatEvent('release', payload({ action: 'published', release: { name: '<b>1.0</b>', body: '🧑'.repeat(5000), html_url: `${repository.html_url}/releases/tag/v1` } }));
-  assert.ok(release.text.length < 4096);
-  assert.ok(release.text.includes('*[<b\\>1\\.0</b\\>](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1)*'));
-  assert.ok(release.text.endsWith('…'));
+  assert.ok(release.messages[0].length < 4096);
+  assert.ok(release.messages[0].includes('*[<b\\>1\\.0</b\\>](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1)*'));
+  assert.ok(release.messages[0].endsWith('…'));
   assert.equal(release.parse_mode, 'MarkdownV2');
-  assert.ok(release.text.isWellFormed());
+  assert.ok(release.messages[0].isWellFormed());
 });
 
 test('release layout uses one linked title without repeating its version or adding a standalone URL', () => {
@@ -44,14 +46,14 @@ test('release layout uses one linked title without repeating its version or addi
     tag_name: 'v1.2.3', name: 'Spring update v1.2.3', body: 'Fix startup\nImprove performance',
     html_url: `${repository.html_url}/releases/tag/v1.2.3`,
   } }));
-  assert.equal(release.text, [
+  assert.equal(release.messages[0], [
     '*[KiritoXDone/Github\\-TG\\-Bot](https://github.com/kiritoxdone/github-tg-bot)*',
     '🚀 *Release* · 已发布 · [octocat](https://github.com/octocat)',
     '',
     '*[Spring update v1\\.2\\.3](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1.2.3)*',
     '', '>Fix startup', '>Improve performance',
   ].join('\n'));
-  assert.doesNotMatch(release.text, /^https?:/m);
+  assert.doesNotMatch(release.messages[0], /^https?:/m);
 });
 
 test('push links the branch to its comparison and each short hash to its commit', () => {
@@ -59,9 +61,9 @@ test('push links the branch to its comparison and each short hash to its commit'
     compare: `${repository.html_url}/compare/abc...def`,
     commits: [{ id: 'abcdef123456', message: 'fix: handle [brackets] & *stars*\nLong explanation', url: `${repository.html_url}/commit/abcdef123456` }],
   }));
-  assert.ok(push.text.includes('[feature\\_v2](https://github.com/KiritoXDone/Github-TG-Bot/compare/abc...def)'));
-  assert.ok(push.text.includes('• [abcdef1](https://github.com/KiritoXDone/Github-TG-Bot/commit/abcdef123456) fix: handle \\[brackets\\] & \\*stars\\*'));
-  assert.doesNotMatch(push.text, /Long explanation|^https?:/m);
+  assert.ok(push.messages[0].includes('[feature\\_v2](https://github.com/KiritoXDone/Github-TG-Bot/compare/abc...def)'));
+  assert.ok(push.messages[0].includes('• [abcdef1](https://github.com/KiritoXDone/Github-TG-Bot/commit/abcdef123456) fix: handle \\[brackets\\] & \\*stars\\*'));
+  assert.doesNotMatch(push.messages[0], /Long explanation|^https?:/m);
 });
 
 test('escapes untrusted Markdown and URL parentheses without allowing injected formatting', () => {
@@ -70,12 +72,12 @@ test('escapes untrusted Markdown and URL parentheses without allowing injected f
     body: '_ * [ ] ( ) ~ ` > # + - = | { } . ! \\',
     html_url: 'https://github.com/a/b/issues/1?label=(bug)',
   } }));
-  assert.ok(event.text.includes('\n🎫 *[Issue \\#1](https://github.com/a/b/issues/1?label=(bug\\))*'));
-  assert.ok(event.text.includes('*\\*boom\\* \\[click\\]\\(https://evil\\.example\\)*'));
-  assert.ok(event.text.endsWith('>\\_ \\* \\[ \\] \\( \\) \\~ \\` \\> \\# \\+ \\- \\= \\| \\{ \\} \\. \\! \\\\'));
+  assert.ok(event.messages[0].includes('\n🎫 *[Issue \\#1](https://github.com/a/b/issues/1?label=(bug\\))*'));
+  assert.ok(event.messages[0].includes('*\\*boom\\* \\[click\\]\\(https://evil\\.example\\)*'));
+  assert.ok(event.messages[0].endsWith('>\\_ \\* \\[ \\] \\( \\) \\~ \\` \\> \\# \\+ \\- \\= \\| \\{ \\} \\. \\! \\\\'));
   for (const target of ['javascript:alert(1)', 'https://evil.example/x', 'https://github.com@evil.example/x', 'https://user:pass@github.com/a/b', `https://github.com/${'a'.repeat(700)}`]) {
     const result = formatEvent('release', payload({ release: { tag_name: 'v1', html_url: target } }));
-    assert.ok(result.text.includes('*[v1](https://github.com/kiritoxdone/github-tg-bot/releases)*'));
+    assert.ok(result.messages[0].includes('*[v1](https://github.com/kiritoxdone/github-tg-bot/releases)*'));
   }
 });
 
@@ -87,9 +89,33 @@ test('bounds punctuation-heavy text, many quoted lines and long commit links', (
   ];
   for (const [type, data] of fixtures) {
     const result = formatEvent(type, payload(data));
-    assert.ok(result.text.length <= 3900, `${type}: ${result.text.length}`);
-    assert.ok(result.text.isWellFormed());
-    assert.doesNotMatch(result.text, /^https?:/m);
+    for (const message of result.messages) {
+      assert.ok(message.length <= 3900, `${type}: ${message.length}`);
+      assert.ok(message.isWellFormed());
+      assert.doesNotMatch(message, /^https?:/m);
+    }
+  }
+});
+
+test('paginates every commit in order, including large webhook arrays, without cutting links', () => {
+  for (const count of [0, 1, 50, 2048]) {
+    const commits = Array.from({ length: count }, (_, index) => ({
+      id: (0x1000000 + index).toString(16).padEnd(40, '0'),
+      message: `change ${index}: 🧑 ${'*_[brackets]'.repeat(12)}`,
+    }));
+    const result = formatEvent('push', payload({ ref: 'refs/heads/main', commits }));
+    assert.ok(result.messages.length > 0);
+    if (count >= 50) assert.ok(result.messages.length > 1);
+    for (const [index, message] of result.messages.entries()) {
+      assert.ok(message.length <= 3900);
+      assert.ok(message.isWellFormed());
+      assert.ok(message.startsWith('*[KiritoXDone/Github\\-TG\\-Bot]('));
+      if (result.messages.length > 1) assert.ok(message.includes(`第 ${index + 1}/${result.messages.length} 页 · 共 ${count} 个提交`));
+    }
+    const text = result.messages.join('\n');
+    const ids = [...text.matchAll(/\/commit\/([a-f\d]{40})\)/g)].map(match => match[1]);
+    assert.deepEqual(ids, commits.map(commit => commit.id));
+    assert.doesNotMatch(text, /另有/);
   }
 });
 

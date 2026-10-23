@@ -96,6 +96,30 @@ function fit(value, budget, render) {
   return render(clip(value, low));
 }
 
+function pushMessages(header, commits, repoUrl) {
+  if (!commits.length) return [header];
+  const pageLabel = (page, total) => `第 ${page}/${total} 页 · 共 ${commits.length} 个提交`;
+  // A page holds at least one commit. Reserve the largest possible page label
+  // before splitting so adding page numbers cannot overflow the final message.
+  const budget = MAX_MESSAGE - header.length - pageLabel(commits.length, commits.length).length - 3;
+  const pages = [];
+  let current = '';
+  for (const c of commits) {
+    const commitUrl = url(c.url) || (/^[a-f\d]{7,40}$/i.test(c.id || '') ? `${repoUrl}/commit/${c.id}` : `${repoUrl}/commits`);
+    const shortId = line(c.id, 80).slice(0, 7).replace(/[\uD800-\uDBFF]$/, '');
+    const prefix = `• ${href(shortId || 'commit', commitUrl)} `;
+    const message = line(typeof c.message === 'string' ? c.message.split('\n')[0] : '', 180);
+    const entry = prefix + fit(message, budget - prefix.length, md);
+    if (current && current.length + entry.length + 1 > budget) {
+      pages.push(current);
+      current = '';
+    }
+    current += `${current ? '\n' : ''}${entry}`;
+  }
+  if (current) pages.push(current);
+  return pages.map((body, index) => `${header}${pages.length > 1 ? `\n${pageLabel(index + 1, pages.length)}` : ''}\n\n${body}`);
+}
+
 export function formatEvent(event, p) {
   const repo = repoName(p.repository?.full_name);
   if (!repo) return null;
@@ -109,7 +133,6 @@ export function formatEvent(event, p) {
   let title;
   let subject = '';
   let body = '';
-  let details = '';
   const action = md(line(p.action, 60));
   const linkedTitle = (emoji, label, target, state = action) =>
     `${emoji} *${href(label, url(target) || repoUrl)}*${state ? ` · ${state}` : ''}`;
@@ -121,20 +144,7 @@ export function formatEvent(event, p) {
       const commits = Array.isArray(p.commits) ? p.commits : [];
       const label = p.deleted ? (p.ref?.startsWith('refs/tags/') ? '删除标签' : '删除分支') : p.forced ? 'Force push' : 'Push';
       title = `${emoji} *${label}* · ${href(ref, url(p.compare) || repoUrl)}`;
-      let shown = 0;
-      for (const c of commits.slice(0, 8)) {
-        const commitUrl = url(c.url) || (/^[a-f\d]{7,40}$/i.test(c.id || '') ? `${repoUrl}/commit/${c.id}` : `${repoUrl}/commits`);
-        const shortId = line(c.id, 80).slice(0, 7).replace(/[\uD800-\uDBFF]$/, '');
-        const prefix = `• ${href(shortId || 'commit', commitUrl)} `;
-        // Reserve space for the omitted-count line, even with unusually long URLs.
-        const budget = MAX_MESSAGE - project.length - title.length - actorLabel.length - details.length - prefix.length - 80;
-        if (budget < 40) break;
-        const message = line(typeof c.message === 'string' ? c.message.split('\n')[0] : '', 180);
-        details += `${prefix}${fit(message, budget, md)}\n`;
-        shown++;
-      }
-      if (commits.length > shown) details += `…另有 ${commits.length - shown} 个提交`;
-      break;
+      return { repo, category, messages: pushMessages(`${project}\n${title} · ${actorLabel}`, commits, repoUrl), parse_mode: 'MarkdownV2' };
     }
     case 'issues':
       if (!p.issue) return null;
@@ -197,7 +207,6 @@ export function formatEvent(event, p) {
   }
   let text = `${project}\n${title} · ${actorLabel}`;
   if (subject) text += `\n\n${subject}`;
-  if (details.trim()) text += `\n\n${details.trim()}`;
   if (body.trim()) text += `\n\n${fit(body.trim(), MAX_MESSAGE - text.length - 2, quote)}`;
-  return { repo, category, text, parse_mode: 'MarkdownV2' };
+  return { repo, category, messages: [text], parse_mode: 'MarkdownV2' };
 }

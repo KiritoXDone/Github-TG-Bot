@@ -16,6 +16,7 @@
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
+- Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
 - 通知使用 MarkdownV2：第一行是加粗、可点击的 `owner/repo`，第二行显示事件类型与操作人；引用正文，版本号、Issue/PR 编号和提交哈希可点击，不单独附加裸链接；正文特殊字符安全转义。
 - Release 标题与版本号合并为一个链接；标题已包含版本号时不再重复显示，发布、更新、撤回等状态使用中文。
 - 完整文案与通知格式见 [当前消息文本模板](docs/message-templates.md)。
@@ -190,17 +191,19 @@ npm run telegram:setup
 | `stars` | `star` | ⭐ Star、⭐➖ 取消 Star |
 | `forks` | `fork` | 🌿 Fork |
 
-`commits` 是一次 Push 的摘要，不会逐个 Commit 单独刷屏。事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
+`commits` 按一次 Push 汇总所有收到的提交，不限制为前几条；超出消息长度时自动分成带页码的多条消息，哈希和链接保持完整。每个提交仍展示第一行摘要（最多 180 字符）。不同 Push 分别处理，不按分钟聚合。GitHub 自身的 Push Webhook 最多包含 2048 个提交；本实现展示 Webhook 中实际包含的全部条目，不通过 GitHub API 补取超出部分。[GitHub Push 负载说明](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
+
+事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
 
 ## 投递行为和限制
 
-- 先在 D1 事务中记录投递 ID 和待发消息，再返回 200。重复 GitHub delivery ID、Telegram update ID 在 **30 天**内不会重复入队；重放旧事件不会追加后来新订阅的收件人。
+- 先在 D1 事务中记录投递 ID、全部分页及收件目标，再返回 200。重复 GitHub delivery ID、Telegram update ID 在 **30 天**内不会重复入队；重放旧事件不会追加后来新订阅的收件人。
 - 同一消息使用数据库租约防止并发 Worker/Cron 同时发送。Telegram 不提供 sendMessage 幂等键，因此网络超时发生在 Telegram 已收件之后时，重试仍可能重复，不能保证端到端 exactly-once。
-- 限流遵守 Telegram `retry_after`；网络/5xx 错误指数退避，最多 12 次尝试，之后标记 failed。永久 4xx（如 Bot 被踢出群）直接标记 failed；修复后发送 `/retry`。通知顺序不保证严格等同 GitHub 发生顺序。
+- 限流遵守 Telegram `retry_after`；网络/5xx 错误指数退避，最多 12 次尝试，之后标记 failed。永久 4xx（如 Bot 被踢出群）直接标记 failed；修复后发送 `/retry`。同一次 Push 发往同一目标/话题的分页按顺序发送，中间一页失败时后续页等待恢复；不同事件的通知顺序不保证严格等同 GitHub 发生顺序。
 - GitHub 请求处理失败返回 503。GitHub 不自动重投所有失败 Webhook，需要在 Recent deliveries 中检查并手动 Redeliver；若事件已入队但 Telegram 失败，使用 `/retry`。[GitHub 重投说明](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)
-- 成功/取消通知会清空正文；失败通知保留正文以便重试。Cron 每天 UTC 03:00 清理超过 30 天的已结束消息和去重记录，待发消息保留到处理结束。
+- 成功/取消通知会清空正文；失败通知保留正文以便重试。Cron 每天 UTC 03:00 清理超过 30 天的已结束消息和去重记录，待发消息保留到处理结束；仍被后续待发页依赖的失败页也会保留，避免清理后跳过失败页。
 - 每个聊天/话题最多订阅 50 个仓库。单个 GitHub Payload 上限 1 MiB、Telegram Payload 上限 256 KiB，超限返回 413。大量 Push 等大型负载需要按实际情况调整源码上限。
-- Cron 每分钟最多处理 20 条，Webhook 到达时另尝试处理 10 条。适合个人和小团队；吞吐较高时可改用 Cloudflare Queues。Workers、D1 和 Cron 的使用量以 Cloudflare 账户实际计费与配额为准。
+- Cron 每分钟最多处理 20 条消息，Webhook 到达时另尝试处理 10 条；一次处理接近时间预算时，剩余消息留待后续调用继续。这是每轮处理额度，不是 Commit 数量上限，未处理的分页保留在队列中。适合个人和小团队；吞吐较高时可改用 Cloudflare Queues。Workers、D1 和 Cron 的使用量以 Cloudflare 账户实际计费与配额为准。
 - `/target remove` 会清理该目标订阅并取消待发/失败消息；已经开始发送的消息可能到达。个人通知目标停用后，仍能在私聊使用管理命令重新连接。
 - 当前不处理 Telegram 频道发帖命令、匿名管理员命令或群升级后的 chat ID 自动迁移；群升级后请移除旧目标，再连接新群并重新订阅。
 

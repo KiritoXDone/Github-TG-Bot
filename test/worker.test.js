@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHmac, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { formatEvent } from '../src/format.js';
 
 let mf;
 let db;
@@ -48,7 +49,7 @@ before(async () => {
     },
   }));
   db = await mf.getD1Database('DB');
-  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql']) {
+  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql']) {
     const sql = await readFile(`migrations/${file}`, 'utf8');
     for (const statement of sql.split(';').filter((s) => s.trim())) await db.prepare(statement).run();
   }
@@ -77,6 +78,23 @@ async function eventually(predicate) {
 
 async function settled() {
   await eventually(async () => (await db.prepare("SELECT count(*) AS n FROM outbox WHERE status = 'pending' AND next_attempt_at <= ?").bind(Math.floor(Date.now() / 1000)).first()).n === 0);
+}
+
+async function drain() {
+  for (let pass = 0; pass < 20; pass++) {
+    const now = Math.floor(Date.now() / 1000);
+    await mf.dispatchFetch(`https://worker.test/__flush?now=${now}`);
+    if ((await db.prepare("SELECT count(*) AS n FROM outbox WHERE status = 'pending' AND next_attempt_at <= ?").bind(now).first()).n === 0) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('Outbox did not drain');
+}
+
+function pushPayload(count = 60) {
+  return { repository: { full_name: repo }, sender: { login: 'octocat' }, ref: 'refs/heads/main',
+    commits: Array.from({ length: count }, (_, index) => ({
+      id: (0x1000000 + index).toString(16).padEnd(40, '0'), message: `commit ${index}: ${'update '.repeat(25)}`,
+    })) };
 }
 
 function telegram(text, options = {}) {
@@ -149,6 +167,107 @@ test('subscribes, delivers an issue, and deduplicates concurrent GitHub redelive
   assert.equal(sent[0].parse_mode, undefined, 'command replies remain plain text');
   assert.ok(notifications[0].text.includes('*<b\\>Bug</b\\>*'));
   assert.ok(notifications[0].text.includes('>Details'));
+});
+
+test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {
+  await command(`/sub ${repo} commits`);
+  await command(`/sub ${repo} commits`, { chat: -10099, thread: 7 });
+  await command(`/sub ${repo} release --to @release_news`);
+  const payload = pushPayload();
+  const expected = formatEvent('push', payload).messages;
+  const delivery = randomUUID();
+  const responses = await Promise.all(Array.from({ length: 4 }, () => github('push', payload, delivery)));
+  assert.ok(responses.every(response => response.status === 200));
+  await drain();
+  for (const chat of ['123', '-10099']) {
+    const messages = sent.filter(message => message.parse_mode === 'MarkdownV2' && message.chat_id === chat);
+    assert.deepEqual(messages.map(message => message.text), expected);
+    if (chat === '-10099') assert.ok(messages.every(message => message.message_thread_id === 7));
+  }
+  assert.equal(sent.filter(message => message.chat_id === '-10077').length, 0);
+  const rows = await db.prepare('SELECT status, part_index, batch_id FROM outbox WHERE repo = ?').bind(repo).all();
+  assert.equal(rows.results.length, expected.length * 2);
+  assert.ok(rows.results.every(row => row.status === 'sent'));
+  await command(`/sub ${repo} commits --to -10066`);
+  await github('push', payload, delivery); await drain();
+  assert.equal(sent.filter(message => message.chat_id === '-10066').length, 0);
+});
+
+test('a failed multipart insert rolls back all pages and the receipt before a safe redelivery', async () => {
+  await command(`/sub ${repo} commits`);
+  const delivery = randomUUID();
+  const payload = pushPayload();
+  await db.prepare("CREATE TRIGGER fail_second_part BEFORE INSERT ON outbox WHEN NEW.part_index = 1 BEGIN SELECT RAISE(ABORT, 'test page insert failure'); END").run();
+  try {
+    assert.equal((await github('push', payload, delivery)).status, 503);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ?').bind(repo).first()).n, 0);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM receipts WHERE id = ?').bind(`gh:${delivery}`).first()).n, 0);
+  } finally { await db.prepare('DROP TRIGGER fail_second_part').run(); }
+  assert.equal((await github('push', payload, delivery)).status, 200);
+  await drain();
+  assert.deepEqual(sent.filter(message => message.parse_mode).map(message => message.text), formatEvent('push', payload).messages);
+});
+
+test('rate-limited pages resume in order without blocking unrelated notifications', async () => {
+  await command(`/sub ${repo}`);
+  const payload = pushPayload(150);
+  const expected = formatEvent('push', payload).messages;
+  responses.push({ ok: true, result: { message_id: 1 } }, { ok: false, error_code: 429, parameters: { retry_after: 120 } });
+  await github('push', payload);
+  await eventually(async () => Boolean(await db.prepare("SELECT id FROM outbox WHERE part_index = 1 AND last_error = 'Telegram error 429'").first()));
+  const retry = await db.prepare('SELECT * FROM outbox WHERE repo = ? AND part_index = 1').bind(repo).first();
+  assert.ok(retry.next_attempt_at >= retry.created_at + 120);
+  const before = sent.length;
+  await mf.dispatchFetch(`https://worker.test/__flush?now=${Math.floor(Date.now() / 1000)}`);
+  assert.equal(sent.length, before, 'later pages wait for the rate-limited page');
+  await github();
+  await eventually(() => sent.some(message => message.text.includes('/issues/1)')));
+  await db.prepare('UPDATE outbox SET next_attempt_at = 0 WHERE id = ?').bind(retry.id).run();
+  await drain();
+  const pushes = sent.filter(message => message.text.includes('*Push*')).map(message => message.text);
+  assert.deepEqual(pushes, [expected[0], expected[1], ...expected.slice(1)]);
+  assert.equal((await db.prepare('SELECT status FROM outbox WHERE id = ?').bind(retry.id).first()).status, 'sent');
+});
+
+test('permanent page failures pause the remaining pages until /retry', async () => {
+  await command(`/sub ${repo}`);
+  const payload = pushPayload(30);
+  const expected = formatEvent('push', payload).messages;
+  responses.push({ ok: true, result: { message_id: 1 } }, { ok: false, error_code: 403 });
+  await github('push', payload);
+  await eventually(async () => Boolean(await db.prepare("SELECT id FROM outbox WHERE status = 'failed' AND part_index = 1").first()));
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ? AND part_index > 1 AND attempts > 0').bind(repo).first()).n, 0);
+  await command('/retry');
+  await drain();
+  assert.deepEqual(sent.filter(message => message.text.includes('*Push*')).map(message => message.text), [expected[0], expected[1], ...expected.slice(1)]);
+});
+
+test('a burst of forty independent pushes drains without dropping or duplicating commits', async () => {
+  await command(`/sub ${repo} commits`);
+  const payloads = pushPayload(40).commits.map(commit => ({ ref: 'refs/heads/main', commits: [commit] }));
+  const results = await Promise.all(payloads.map(payload => github('push', payload)));
+  assert.ok(results.every(result => result.status === 200));
+  await drain();
+  const messages = sent.filter(message => message.text.includes('*Push*'));
+  assert.equal(messages.length, 40);
+  const ids = messages.flatMap(message => [...message.text.matchAll(/\/commit\/([a-f\d]{40})\)/g)].map(match => match[1])).sort();
+  assert.deepEqual(ids, payloads.map(payload => payload.commits[0].id).sort());
+});
+
+test('cleanup retains a failed page needed by pending later pages instead of silently skipping it', async () => {
+  const time = new Date();
+  time.setUTCHours(3, 0, 0, 0);
+  const old = Math.floor(time.getTime() / 1000) - 31 * 86400;
+  await db.prepare(`INSERT INTO outbox (id, chat_id, text, status, batch_id, part_index, next_attempt_at, created_at, finished_at) VALUES
+    ('blocked-head', '123', 'First page', 'failed', 'old-push', 0, 0, ?, ?),
+    ('blocked-tail', '123', 'Second page', 'pending', 'old-push', 1, 0, ?, NULL),
+    ('unrelated-old', '123', 'Old failure', 'failed', NULL, 0, 0, ?, ?)`)
+    .bind(old, old, old, old, old).run();
+  await mf.dispatchFetch(`https://worker.test/__scheduled?time=${time.getTime()}`);
+  assert.equal((await db.prepare("SELECT status FROM outbox WHERE id = 'blocked-head'").first()).status, 'failed');
+  assert.equal((await db.prepare("SELECT attempts FROM outbox WHERE id = 'blocked-tail'").first()).attempts, 0);
+  assert.equal(await db.prepare("SELECT id FROM outbox WHERE id = 'unrelated-old'").first(), null);
+  assert.equal(sent.length, 0);
 });
 
 test('routes by repository, category and group topic, preserving independent subscriptions', async () => {
