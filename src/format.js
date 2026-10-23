@@ -38,6 +38,10 @@ const CHANGE_EMOJI = {
   locked: '🔒', unlocked: '🔓', pinned: '📌', unpinned: '📌',
   milestoned: '🎯', demilestoned: '🎯', transferred: '📦',
 };
+const RELEASE_ACTIONS = {
+  published: '已发布', released: '已发布', prereleased: '已发布',
+  created: '已创建', edited: '已更新', deleted: '已删除', unpublished: '已撤回',
+};
 const pickEmoji = (mapping, key, fallback) => Object.hasOwn(mapping, key) ? mapping[key] : fallback;
 
 function eventEmoji(event, p) {
@@ -150,14 +154,18 @@ export function formatEvent(event, p) {
       }
       body = clip(p.pull_request.body, 1200);
       break;
-    case 'release':
+    case 'release': {
       if (!p.release) return null;
       category = 'release';
-      title = `${emoji} *Release*${action ? ` · ${action}` : ''}${p.release.prerelease ? ' · 预发布' : ''}`;
-      subject = `*${href(line(p.release.tag_name || p.release.name, 180) || 'Release', url(p.release.html_url) || `${repoUrl}/releases`)}*`;
-      if (p.release.tag_name && p.release.name && p.release.name !== p.release.tag_name) subject += ` · ${bold(line(p.release.name, 250))}`;
+      const state = Object.hasOwn(RELEASE_ACTIONS, p.action) ? RELEASE_ACTIONS[p.action] : action;
+      title = `${emoji} *Release*${state ? ` · ${state}` : ''}${p.release.prerelease || p.action === 'prereleased' ? ' · 预发布' : ''}`;
+      const name = line(p.release.name, 250);
+      const tag = line(p.release.tag_name, 180);
+      const label = name && tag && !name.includes(tag) ? `${name} · ${tag}` : name || tag || 'Release';
+      subject = `*${href(label, url(p.release.html_url) || `${repoUrl}/releases`)}*`;
       body = clip(p.release.body, 2400);
       break;
+    }
     case 'issue_comment':
     case 'commit_comment':
     case 'pull_request_review_comment':

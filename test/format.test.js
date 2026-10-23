@@ -39,16 +39,16 @@ test('limits large push and release messages without cutting inline links or Mar
   assert.ok(release.text.isWellFormed());
 });
 
-test('release layout uses a linked version, bold name and quoted body with no standalone URL', () => {
+test('release layout uses one linked title without repeating its version or adding a standalone URL', () => {
   const release = formatEvent('release', payload({ action: 'published', release: {
-    tag_name: 'v1.2.3', name: 'Spring update', body: 'Fix startup\nImprove performance',
+    tag_name: 'v1.2.3', name: 'Spring update v1.2.3', body: 'Fix startup\nImprove performance',
     html_url: `${repository.html_url}/releases/tag/v1.2.3`,
   } }));
   assert.equal(release.text, [
     '*[KiritoXDone/Github\\-TG\\-Bot](https://github.com/kiritoxdone/github-tg-bot)*',
-    '🚀 *Release* · published · [octocat](https://github.com/octocat)',
+    '🚀 *Release* · 已发布 · [octocat](https://github.com/octocat)',
     '',
-    '*[v1\\.2\\.3](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1.2.3)* · *Spring update*',
+    '*[Spring update v1\\.2\\.3](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1.2.3)*',
     '', '>Fix startup', '>Improve performance',
   ].join('\n'));
   assert.doesNotMatch(release.text, /^https?:/m);
