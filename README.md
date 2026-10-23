@@ -1,0 +1,194 @@
+# Github-TG-Bot
+
+[![CI](https://github.com/KiritoXDone/Github-TG-Bot/actions/workflows/ci.yml/badge.svg)](https://github.com/KiritoXDone/Github-TG-Bot/actions/workflows/ci.yml)
+
+运行在 **Cloudflare Workers + D1** 上的 GitHub → Telegram 通知机器人。订阅自己拥有或参与协作的仓库，在 Telegram 接收 Issue、PR、Commit、Release 等动态。支持公开和私有仓库，无需 VPS、Docker、MongoDB 或 GitHub Token。
+
+这是一个独立的 Workers 实现。GitHub 通过 Webhook 推送事件；Telegram 命令通过 Telegram Webhook 接收，没有常驻进程或 API 轮询。
+
+## 功能
+
+- `/sub owner/repo` 订阅；按聊天和群话题分别管理订阅及事件类型。
+- 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。
+- GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
+- D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
+- 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
+- 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
+- `/status` 检查投递状态，`/retry` 重试失败消息。
+- 零运行时 npm 依赖；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
+
+```mermaid
+flowchart LR
+  GH[GitHub Webhooks] --> W[Cloudflare Worker]
+  TG[Telegram 命令] --> W
+  W --> D[(D1 订阅 / 去重 / 发送队列)]
+  D --> S[发送通知]
+  C[每分钟 Cron] --> S
+  S --> T[Telegram 私聊 / 群 / 话题]
+```
+
+## 部署
+
+### 1. 准备
+
+需要 Node.js **22.18+**、Cloudflare 账号、通过 [@BotFather](https://t.me/BotFather) 创建的 Bot，以及自己的 Telegram 数字用户 ID。可从 Telegram 的账号信息机器人获取数字 ID。
+
+GitHub 目标仓库必须能添加 Webhook：自己拥有的仓库可直接配置；协作仓库需要 admin 权限或请管理员代配。普通 collaborator/write 权限本身不保证能添加 Webhook。机器人不自动检查 GitHub 成员身份，也不创建 GitHub Webhook。[GitHub 权限说明](https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks#creating-a-repository-webhook)
+
+```bash
+git clone https://github.com/KiritoXDone/Github-TG-Bot.git
+cd Github-TG-Bot
+npm ci
+npx wrangler login
+npx wrangler d1 create github-tg-bot
+```
+
+将创建结果的 `database_id` 填入 `wrangler.jsonc`，替换全零占位值。如果账号已有同名数据库，先通过 `npx wrangler d1 list` 确认要使用的数据库。不要对不属于本项目的数据库执行迁移。
+
+```bash
+npm run db:remote
+npm run deploy
+```
+
+记下输出的 `https://github-tg-bot.<subdomain>.workers.dev`。无需额外域名或服务器。首次部署尚未配置 Secrets 时，Webhook 与 `/health` 会返回 503，这是预期行为。
+
+### 2. 设置 Secrets
+
+为两个 Webhook 分别生成独立随机值，例如分别运行 `openssl rand -hex 32`。Telegram Secret 只允许字母、数字、`_`、`-`，长度 1–256；建议使用生成的 64 位十六进制字符串。
+
+通过以下交互命令输入值，避免把凭据直接写进 shell 命令或仓库文件：
+
+```bash
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put ALLOWED_USER_IDS
+npx wrangler secret put BOT_USERNAME
+```
+
+| 配置 | 含义 |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | BotFather 提供的 Bot Token |
+| `TELEGRAM_WEBHOOK_SECRET` | Telegram 请求校验用随机字符串 |
+| `GITHUB_WEBHOOK_SECRET` | GitHub Webhook 的 Secret；本实例各目标仓库使用相同值 |
+| `ALLOWED_USER_IDS` | 允许管理机器人的 Telegram 数字用户 ID，逗号分隔 |
+| `BOT_USERNAME` | Bot 的用户名，不含 `@` |
+| `ALLOWED_CHAT_IDS` | 可选；允许收发通知的聊天 ID，逗号分隔 |
+
+`ALLOWED_CHAT_IDS` 未设置或为空时，只允许 `ALLOWED_USER_IDS` 对应用户的私聊。要启用群组，使用 `npx wrangler secret put ALLOWED_CHAT_IDS`，填入例如 `123456789,-1001234567890`。**设置后会替代默认私聊列表**，因此希望继续使用的私聊 ID 也要列出。
+
+允许的用户可以管理所有允许聊天中的订阅；本项目按个人/受信任团队使用设计，不做多租户权限隔离。把私有仓库推送到群组时，群成员会看到通知内容。
+
+### 3. 注册 Telegram Webhook
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+编辑 `.dev.vars`，填写与 Worker 相同的 Token、Telegram Secret、`BOT_USERNAME`，以及刚部署的 `WORKER_URL`。此文件已被 Git 忽略。
+
+```bash
+npm run telegram:setup
+```
+
+脚本先核对 Bot 用户名，再注册 `/webhooks/telegram` 和命令菜单，保留待处理更新。每个 Bot 只有一个 Telegram Webhook；这里应使用专门为本项目创建的 Bot。它不会发送测试消息。
+
+配置完成后，访问 Worker 的 `/health` 应返回 `{"ok":true}`。
+
+### 4. 订阅仓库
+
+在 Bot 私聊中发送：
+
+```text
+/sub KiritoXDone/Github-TG-Bot
+/list
+```
+
+群组使用：把 Bot 加入群，配置 `ALLOWED_CHAT_IDS`，然后由允许的用户在目标群/话题发送 `/sub@你的Bot用户名 owner/repo`。无需关闭 Telegram 隐私模式。通知会发送到执行订阅命令的同一个话题，Bot 需要在该群中拥有发送消息权限。
+
+### 5. 添加 GitHub Webhook
+
+在目标仓库的 **Settings → Webhooks → Add webhook** 中设置：
+
+| 字段 | 值 |
+| --- | --- |
+| Payload URL | `https://你的Worker域名/webhooks/github` |
+| Content type | `application/json` |
+| Secret | 与 Worker 的 `GITHUB_WEBHOOK_SECRET` 相同 |
+| SSL verification | 保持启用 |
+| Active | 启用 |
+
+选择需要的事件。默认四类通知需要勾选 **Issues、Pull requests、Pushes、Releases**。GitHub 首次 `ping` 应收到 `200` 和 `pong`。
+
+一次完整验证：发送 `/sub owner/repo` → 配置 Webhook → 在仓库创建一个真实 Issue → 确认 Telegram 收到消息 → `/status` 检查结果。
+
+## 命令与事件
+
+| 命令 | 用途 |
+| --- | --- |
+| `/start`、`/help` | 使用说明 |
+| `/sub owner/repo [events]` | 新增或替换本聊天/话题的订阅；省略事件使用默认四类 |
+| `/subscribe owner/repo [events]` | `/sub` 的别名 |
+| `/unsub owner/repo` | 取消订阅及其待发/失败通知；已在发送中的消息可能仍到达 |
+| `/unsubscribe owner/repo` | `/unsub` 的别名 |
+| `/events owner/repo events` | 修改已有订阅的事件类型 |
+| `/list` | 查看本聊天/话题的订阅 |
+| `/status` | 本聊天/话题的投递统计及 ID |
+| `/retry` | 将本聊天/话题的失败通知重新入队 |
+
+```text
+/sub owner/repo issues,pr,commits,release
+/sub owner/repo all
+/events owner/repo release,actions
+/unsub owner/repo
+```
+
+| 类型 | GitHub Webhook 事件 | 行为 |
+| --- | --- | --- |
+| `issues` | `issues` | Issue 新建、关闭、重新打开、指派、标签等 |
+| `pr` | `pull_request` | PR 创建、同步提交、关闭、合并等 |
+| `commits` | `push` | Push 批次内提交摘要，标记 force push 和分支/标签删除 |
+| `release` | `release` | Release 动态，标记 pre-release |
+| `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | Issue、PR、Commit 评论 |
+| `reviews` | `pull_request_review` | PR Review |
+| `actions` | `workflow_run` | 仅 workflow completed，包含结论 |
+| `stars` | `star` | Star 创建/删除 |
+| `forks` | `fork` | Fork |
+
+`commits` 是一次 Push 的摘要，不会逐个 Commit 单独刷屏。事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
+
+## 投递行为和限制
+
+- 先在 D1 事务中记录投递 ID 和待发消息，再返回 200。重复 GitHub delivery ID、Telegram update ID 在 **30 天**内不会重复入队；重放旧事件不会追加后来新订阅的收件人。
+- 同一消息使用数据库租约防止并发 Worker/Cron 同时发送。Telegram 不提供 sendMessage 幂等键，因此网络超时发生在 Telegram 已收件之后时，重试仍可能重复，不能保证端到端 exactly-once。
+- 限流遵守 Telegram `retry_after`；网络/5xx 错误指数退避，最多 12 次尝试，之后标记 failed。永久 4xx（如 Bot 被踢出群）直接标记 failed；修复后发送 `/retry`。通知顺序不保证严格等同 GitHub 发生顺序。
+- GitHub 请求处理失败返回 503。GitHub 不自动重投所有失败 Webhook，需要在 Recent deliveries 中检查并手动 Redeliver；若事件已入队但 Telegram 失败，使用 `/retry`。[GitHub 重投说明](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)
+- 成功/取消通知会清空正文；失败通知保留正文以便重试。Cron 每天 UTC 03:00 清理超过 30 天的已结束消息和去重记录，待发消息保留到处理结束。
+- 每个聊天/话题最多订阅 50 个仓库。单个 GitHub Payload 上限 1 MiB、Telegram Payload 上限 256 KiB，超限返回 413。大量 Push 等大型负载需要按实际情况调整源码上限。
+- Cron 每分钟最多处理 20 条，Webhook 到达时另尝试处理 10 条。适合个人和小团队；吞吐较高时可改用 Cloudflare Queues。Workers、D1 和 Cron 的使用量以 Cloudflare 账户实际计费与配额为准。
+- 撤销聊天白名单会阻止后续发送，但已经开始发送的消息可能到达。修改白名单后也应按需要清理不再使用的订阅。
+- 当前不处理 Telegram 频道发帖命令、匿名管理员命令或群升级后的 chat ID 自动迁移；群升级后应更新白名单，并在新群重新订阅。
+
+## 本地开发与验证
+
+```bash
+npm ci
+npm test
+npm run check
+cp .dev.vars.example .dev.vars
+# 填写本地测试配置后：
+npm run db:local
+npm run dev
+```
+
+`npm test` 使用 workerd 的真实 Worker 环境和 D1 SQL，覆盖签名/权限拒绝、订阅/话题路由、事件过滤、并发重复投递、429 重试、永久失败恢复等。测试会拦截所有 Telegram 出站请求，不使用真实 Bot Token。
+
+`npm run check` 还会执行 Wrangler 部署 dry-run，不上传 Worker。GitHub Actions 在 push/PR 时运行同样的检查。
+
+源码结构：`src/index.js` 处理 Webhook 和 Cron；`src/bot.js` 处理命令；`src/format.js` 格式化 GitHub 事件；`src/delivery.js` 发送与重试；`migrations/` 管理 D1 表结构。
+
+部署采用上述 Wrangler 命令。Secrets 不放进代码、Wrangler vars、GitHub Issues 或日志；本地 `.dev.vars` 也不要提交。版本升级时先查看新迁移，再运行 `npm run db:remote` 和 `npm run deploy`。
+
+## 协议
+
+MIT，见 [LICENSE](LICENSE)。

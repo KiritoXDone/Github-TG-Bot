@@ -1,0 +1,9 @@
+TELEGRAM_BOT_TOKEN="replace-with-botfather-token"
+TELEGRAM_WEBHOOK_SECRET="replace-with-random-hex-secret"
+GITHUB_WEBHOOK_SECRET="replace-with-a-different-random-hex-secret"
+ALLOWED_USER_IDS="123456789"
+# Empty = authorized users' private chats only. To enable groups, list all destinations.
+ALLOWED_CHAT_IDS=""
+BOT_USERNAME="your_bot_username"
+# Only used by the local setup script, not by the Worker.
+WORKER_URL="https://github-tg-bot.YOUR-SUBDOMAIN.workers.dev"

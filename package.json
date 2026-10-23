@@ -1,0 +1,21 @@
+{
+  "name": "github-tg-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub repository notifications for Telegram, built for Cloudflare Workers and D1",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/index.js && npm test && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
+    "telegram:setup": "node --env-file=.dev.vars scripts/telegram-setup.js"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261019.2-beta",
+    "wrangler": "4.152.0"
+  }
+}
