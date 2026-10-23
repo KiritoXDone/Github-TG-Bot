@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "github-tg-bot",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "2bdd4d8f-c5b0-4cc7-8f23-3dca3973ffac",
       "migrations_dir": "migrations"
     }
   ],

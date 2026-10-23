@@ -43,7 +43,7 @@ npx wrangler login
 npx wrangler d1 create github-tg-bot
 ```
 
-将创建结果的 `database_id` 填入 `wrangler.jsonc`，替换全零占位值。如果账号已有同名数据库，先通过 `npx wrangler d1 list` 确认要使用的数据库。不要对不属于本项目的数据库执行迁移。
+将创建结果的 `database_id` 填入 `wrangler.jsonc`，替换已有值。仓库中的 ID 属于维护者已部署的实例，复制部署时需要换成你自己的数据库 ID。如果账号已有同名数据库，先通过 `npx wrangler d1 list` 确认要使用的数据库。不要对不属于本项目的数据库执行迁移。
 
 ```bash
 npm run db:remote
