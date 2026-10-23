@@ -165,8 +165,8 @@ test('subscribes, delivers an issue, and deduplicates concurrent GitHub redelive
   assert.equal(notifications[0].chat_id, '123');
   assert.equal(notifications[0].parse_mode, 'MarkdownV2');
   assert.equal(sent[0].parse_mode, undefined, 'command replies remain plain text');
-  assert.ok(notifications[0].text.includes('*<b\\>Bug</b\\>*'));
-  assert.ok(notifications[0].text.includes('>Details'));
+  assert.ok(notifications[0].text.includes('[github\\-tg\\-bot\\#1 <b\\>Bug</b\\>]('));
+  assert.ok(notifications[0].text.endsWith('\n\nDetails'));
 });
 
 test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {
@@ -224,7 +224,7 @@ test('rate-limited pages resume in order without blocking unrelated notification
   await eventually(() => sent.some(message => message.text.includes('/issues/1)')));
   await db.prepare('UPDATE outbox SET next_attempt_at = 0 WHERE id = ?').bind(retry.id).run();
   await drain();
-  const pushes = sent.filter(message => message.text.includes('*Push*')).map(message => message.text);
+  const pushes = sent.filter(message => message.text.startsWith('🔨 ')).map(message => message.text);
   assert.deepEqual(pushes, [expected[0], expected[1], ...expected.slice(1)]);
   assert.equal((await db.prepare('SELECT status FROM outbox WHERE id = ?').bind(retry.id).first()).status, 'sent');
 });
@@ -239,7 +239,7 @@ test('permanent page failures pause the remaining pages until /retry', async () 
   assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ? AND part_index > 1 AND attempts > 0').bind(repo).first()).n, 0);
   await command('/retry');
   await drain();
-  assert.deepEqual(sent.filter(message => message.text.includes('*Push*')).map(message => message.text), [expected[0], expected[1], ...expected.slice(1)]);
+  assert.deepEqual(sent.filter(message => message.text.startsWith('🔨 ')).map(message => message.text), [expected[0], expected[1], ...expected.slice(1)]);
 });
 
 test('a burst of forty independent pushes drains without dropping or duplicating commits', async () => {
@@ -248,7 +248,7 @@ test('a burst of forty independent pushes drains without dropping or duplicating
   const results = await Promise.all(payloads.map(payload => github('push', payload)));
   assert.ok(results.every(result => result.status === 200));
   await drain();
-  const messages = sent.filter(message => message.text.includes('*Push*'));
+  const messages = sent.filter(message => message.text.startsWith('🔨 '));
   assert.equal(messages.length, 40);
   const ids = messages.flatMap(message => [...message.text.matchAll(/\/commit\/([a-f\d]{40})\)/g)].map(match => match[1])).sort();
   assert.deepEqual(ids, payloads.map(payload => payload.commits[0].id).sort());

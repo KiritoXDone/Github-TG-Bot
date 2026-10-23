@@ -4,285 +4,246 @@
 
 这是面向 Telegram 的文本审阅清单，包含全部 9 类事件通知、命令回复、命令菜单和用户错误提示。模板实际由 `src/format.js`、`src/bot.js`、`src/targets.js` 生成；修改本文件不会直接改变 Bot。
 
-已纳入本次调整：第一行使用完整的 `owner/repo`；Release 标题与版本号去重；Release 状态使用中文。其他事件的动作、Review 状态和 Actions 结论目前仍保留 GitHub 英文值，下文按现状列出。
+所有事件通知已统一为 GitHubBot 风格：首行是事件和对象链接，作者另起一行，正文直接展示。Push 参考用户提供的真实样例；Issue 参考 [@GitHubBot 转发样例](https://t.me/AWAvenueAdsRule/24)；PR 和评论参考来源显示为 GitHub 的[公开 PR 样例](https://t.me/projectXtls/1385)及[评论样例](https://t.me/projectXtls/1393)。PR、评论样例隐藏了来源账号链接。Release、Review、Actions、Star、Fork 和未验证的动作分支按同一风格设计，不声称是官方原文。
 
 ## 1. Release 显示效果
 
 以 Miaopu 2.3.3 为例：
 
-**[KiritoXDone/Miaopu](https://github.com/KiritoXDone/Miaopu)**  
-🚀 **Release** · 已发布 · [KiritoXDone](https://github.com/KiritoXDone)
+🚀 **New release** [Miaopu 2.3.3](https://github.com/KiritoXDone/Miaopu/releases/tag/2.3.3)<br>
+by [@KiritoXDone](https://github.com/KiritoXDone)
 
-**[Miaopu 2.3.3](https://github.com/KiritoXDone/Miaopu/releases/tag/2.3.3)**
-
-> \- 修复比赛详情中切换队伍时色块跳动的问题。
+\- 修复比赛详情中切换队伍时色块跳动的问题。
 
 ## 2. 所有通知共用的规则
 
-- 第一行：加粗、可点击的完整仓库名 `owner/repo`，保留 GitHub 提供的大小写。
-- 第二行：事件 emoji、事件名称、动作或状态、操作人。
-- 操作人是符合用户名格式的 GitHub 账号时可点击；否则作为普通文字展示。没有操作人时使用 `GitHub`。
-- 标题、版本、Issue/PR 编号、提交哈希直接作为超链接文本，不再另外附加一行原文 URL。
-- 正文使用引用块。正文原有的 Markdown 符号按文字转义，不直接当成 Telegram 格式执行。
-- 没有正文或标题的部分自动省略；没有动作时也省略该动作及其分隔符。
-- 长字段和非 Push 长正文以 `…` 截断，完整链接保留。Push 提交列表超长时自动分页，不省略提交条目。每条通知的 Markdown 源文本控制在 3900 字符内。
-- 下方代码块使用 Telegram MarkdownV2 的形式：`*文字*` 表示加粗，`[文字](链接)` 表示行内链接，`>` 表示引用。`{变量}` 是占位符；实际发送时由程序代入并转义。
-- 为便于审阅，示例省略了运行时为特殊字符添加的转义反斜线，不能直接当作 Telegram API 请求体发送。
-- Bot 命令回复是纯文本，见第 5 节。
+- 首行直接展示事件和带链接的对象，仓库使用短名 `repo`，保留 GitHub 大小写；没有独立的 `owner/repo` 标题行。
+- 普通 Push 在每条提交后显示提交作者。其他事件第二行为 `by @操作人`，PR 使用样例中的 `by: @操作人`。操作人链接到 GitHub 主页，Commit 作者使用 GitHub 提供的显示名称。
+- 事件使用英文描述，例如 `New issue`、`Merged pull request`、`New release`、`Workflow succeeded`。
+- 正文直接展示，保留换行；正文原有 Markdown 符号按文字转义，不作为 Telegram 格式执行，不整体包入引用块。
+- 对象标题、提交数量、哈希、作者使用行内链接，模板不额外附加原文 URL。正文中用户自行写入的 URL 仍作为原文保留。
+- 当前 Bot 没有回复回写 GitHub 的功能，因此不显示官方样例中的回复评论提示。
+- 非 Push 长字段和长正文以 `…` 截断，完整链接保留。Push 的提交条数不设上限，超长按完整提交行分页。每条 Markdown 源文本不超过 3900 字符。
+- 下方代码块使用 Telegram MarkdownV2 的形式：`*文字*` 表示加粗，`[文字](链接)` 表示行内链接。`{变量}` 是占位符；实际发送时由程序代入并转义。
+- 为便于审阅，示例省略运行时的特殊字符转义，不能直接当作 Telegram API 请求体发送。
+- Bot 管理命令回复保持纯文本，见第 5 节。
 
-### 通用动作 emoji
+### Issue / PR 通用动作
 
-以下动作适用于 Issue、PR 和评论；具体事件的特殊规则优先。
+`{对象}` 对应 `issue` 或 `pull request`。事件自身的特殊状态优先，具体见下文。
 
-| GitHub action | emoji | 含义 |
+| GitHub action | 标题文字 | emoji |
 | --- | --- | --- |
-| `edited` | ✏️ | 编辑 |
-| `deleted` | 🗑️ | 删除 |
-| `reopened` | 🔄 | 重新打开 |
-| `assigned` / `unassigned` | 👤 | 指派 / 取消指派 |
-| `labeled` / `unlabeled` | 🏷️ | 添加 / 移除标签 |
-| `locked` | 🔒 | 锁定 |
-| `unlocked` | 🔓 | 解锁 |
-| `pinned` / `unpinned` | 📌 | 置顶 / 取消置顶 |
-| `milestoned` / `demilestoned` | 🎯 | 设置 / 移除里程碑 |
-| `transferred` | 📦 | 转移 |
+| `opened` / `created` | `New {对象}` | Issue 🐛 / PR 🔌 |
+| `closed` | `Closed {对象}` | 见对应事件 |
+| `reopened` | `Reopened {对象}` | 🔄 |
+| `edited` | `Updated {对象}` | ✏️ |
+| `deleted` | `Deleted {对象}` | 🗑️ |
+| `assigned` / `unassigned` | `Assigned {对象}` / `Unassigned {对象}` | 👤 |
+| `labeled` / `unlabeled` | `Labeled {对象}` / `Unlabeled {对象}` | 🏷️ |
+| `locked` / `unlocked` | `Locked {对象}` / `Unlocked {对象}` | 🔒 / 🔓 |
+| `pinned` / `unpinned` | `Pinned {对象}` / `Unpinned {对象}` | 📌 |
+| `milestoned` | `Added milestone to {对象}` | 🎯 |
+| `demilestoned` | `Removed milestone from {对象}` | 🎯 |
+| `transferred` | `Transferred {对象}` | 📦 |
+| `typed` / `untyped` | `Changed type of {对象}` / `Removed type from {对象}` | Issue 🐛 / PR 🔌 |
+| 未映射或缺失 | `Issue updated` / `Pull request updated` | Issue 🐛 / PR 🔌 |
 
 ## 3. 事件通知模板
 
 ### 3.1 Commit / Push
 
-普通推送：
-
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-📤 *Push* · [{分支名}]({比较链接}) · [{操作人}]({操作人主页})
+🔨 [{数量} new commits]({比较链接}) to *{repo}:{分支名}*:
 
-• [{短哈希1}]({提交链接1}) {提交摘要1}
-• [{短哈希2}]({提交链接2}) {提交摘要2}
+[{短哈希1}]({提交链接1}): {提交摘要1} by {提交作者1}
+[{短哈希2}]({提交链接2}): {提交摘要2} by {提交作者2}
 ```
 
-同一次 Push 收到的所有提交都会展示，不设 Bot 端的提交条数上限。内容能放入一条时只发一条；超长时按完整提交行分页，每页重复仓库和事件标题，并增加页码与提交总数：
+单个提交使用 `1 new commit`。提交数量链接到本次 Push 的 compare 页面；缺失比较链接时跳转仓库。短哈希取前 7 个字符，摘要取第一行、最多 180 字符，作者取 `commit.author.name`，缺失时使用 `username`，再缺失则显示 `Unknown author`，不会用推送者冒充提交作者。作者最多 80 字符。
+
+收到的所有提交都会展示，超长时增加页码并重复标题：
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-📤 *Push* · [{分支名}]({比较链接}) · [{操作人}]({操作人主页})
-第 {当前页}/{总页数} 页 · 共 {提交总数} 个提交
+🔨 [{提交总数} new commits]({比较链接}) to *{repo}:{分支名}*:
+Page {当前页}/{总页数}
 
-• [{短哈希}]({提交链接}) {提交摘要}
+[{短哈希}]({提交链接}): {提交摘要} by {提交作者}
 ```
 
-短哈希取前 7 个字符，摘要取提交说明第一行，最多 180 字符。不会再用“另有 N 个提交”隐藏剩余条目。同一次 Push 的分页依次发送；限流或失败时保留尚未发送的页，恢复后接着发送。分页是 Telegram 消息长度限制下的拆分，不是按一分钟聚合。
+同一次 Push 的分页依次发送，限流或失败后恢复续发。不同 Push 分开发送，不按分钟聚合。分支名去掉 `refs/heads/` 或 `refs/tags/`，最多 180 字符。GitHub 的 Push Webhook 本身最多包含 2048 个提交；这里只展示实际收到的全部条目，不额外补取。
 
-不同 Push 分开发送。分支名去掉 `refs/heads/` 或 `refs/tags/` 前缀。比较链接优先使用 GitHub 的 compare URL，没有时跳转仓库。
+带提交的强推、新分支、标签推送仍使用提交列表；标题之后、页码之前增加以下一行（强推优先）：
 
-第二行的其他形式：
-
-| 场景 | 事件部分（后面仍接引用名链接和操作人） |
+| 场景 | 附加行 |
 | --- | --- |
-| 强制推送 | `⚠️ *Force push*` |
-| 新建分支 | `🌱 *Push*` |
-| 标签推送 | `🏷️ *Push*` |
-| 删除分支 | `🗑️ *删除分支*` |
-| 删除标签 | `🗑️ *删除标签*` |
+| 强制推送 | `⚠️ Forced push by [@{操作人}]({主页})` |
+| 新分支 | `🌱 New branch by [@{操作人}]({主页})` |
+| 新标签 | `🏷️ New tag by [@{操作人}]({主页})` |
+| 更新标签 | `🏷️ Updated tag by [@{操作人}]({主页})` |
 
-emoji 优先级：删除 → 强推 → 标签 → 新分支 → 普通推送。
+无提交的新分支/标签、删除分支/标签：
+
+```markdown
+{emoji} *{New或Deleted} {branch或tag}* [{repo}:{引用名}]({引用链接})
+by [@{操作人}]({操作人主页})
+```
+
+新分支 🌱、新标签 🏷️，链接到对应 tree 页面；删除使用 🗑️，链接到仓库。普通空 Push 使用 `0 new commits`，没有提交列表。
 
 ### 3.2 Issue
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *[Issue #{编号}]({Issue链接})* · {action} · [{操作人}]({操作人主页})
+🐛 *New issue* [{repo}#{编号} {Issue标题}]({Issue链接})
+by [@{操作人}]({操作人主页})
 
-*{Issue标题}*
-
->{正文第一行}
->{正文第二行}
+{Issue正文}
 ```
 
-标题最多 250 字符，正文最多 1200 字符，并受总长度限制。`action` 目前原样显示，例如 `opened`、`closed`、`reopened`、`edited`。
-
-| 场景 | emoji | 显示的 action |
-| --- | --- | --- |
-| 新建或未单独映射的动作 | 🎫 | 原始 action |
-| 关闭，原因是 `completed` | ✅ | `closed` |
-| 关闭，原因是 `not_planned` | 🚫 | `closed` |
-| 其他关闭或没有关闭原因 | 🔴 | `closed` |
-| 编辑、重开、指派、标签等 | 通用动作 emoji | 原始 action |
+其他动作使用通用动作表。关闭时标题为 `Closed issue`：`completed` 使用 ✅，`not_planned` 使用 🚫，其他关闭原因使用 🔴。标题最多 250 字符，正文最多 1200 字符，并受消息总长度限制。
 
 ### 3.3 Pull Request
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *[PR #{编号}]({PR链接})* · {action或merged} · [{操作人}]({操作人主页})
+🔌 *New pull request* [{repo}#{编号} {PR标题}]({PR链接})
+by: [@{操作人}]({操作人主页})
 
-*{PR标题}*
-{来源分支} → {目标分支}
-
->{正文第一行}
->{正文第二行}
+{PR正文}
 ```
 
-标题最多 250 字符，两个分支各最多 100 字符，正文最多 1200 字符。只有两个分支名都存在时才显示箭头行。
+标题最多 250 字符，正文最多 1200 字符。不额外增加来源分支 → 目标分支行。
 
-| 场景 | emoji | 显示的状态 |
+| 场景 | 标题文字 | emoji |
 | --- | --- | --- |
-| 普通新建或其他未映射动作 | 🔃 | 原始 action，例如 `opened` |
-| 新建草稿 | 📝 | `opened` |
-| 转为草稿 | 📝 | `converted_to_draft` |
-| 同步提交 | 🔄 | `synchronize` |
-| 准备审查 | 🔍 | `ready_for_review` |
-| 请求审查 | 🔍 | `review_requested` |
-| 关闭且已合并 | 🔀 | `merged` |
-| 关闭且未合并 | 🚫 | `closed` |
-| 编辑、重开、标签等 | 通用动作 emoji | 原始 action |
+| 新建草稿 | `New draft pull request` | 📝 |
+| 转为草稿 | `Converted to draft` | 📝 |
+| 同步提交 | `Updated pull request` | 🔄 |
+| 准备审查 | `Pull request ready for review` | 🔍 |
+| 请求审查 | `Review requested for` | 🔍 |
+| 移除审查请求 | `Review request removed from` | 🔌 |
+| 自动合并启用 / 停用 | `Auto-merge enabled for` / `Auto-merge disabled for` | 🔌 |
+| 加入 / 移出合并队列 | `Added pull request to merge queue` / `Removed pull request from merge queue` | 🔌 |
+| 关闭且已合并 | `Merged pull request` | 🔀 |
+| 关闭且未合并 | `Closed pull request` | 🚫 |
+| 编辑、重开、标签等 | 通用动作表 | 通用动作表 |
 
 ### 3.4 Release
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *Release* · {中文状态} · [{操作人}]({操作人主页})
+🚀 *New release* [{发布标题}]({Release链接})
+by [@{操作人}]({操作人主页})
 
-*[{发布标题}]({Release链接})*
-
->{发布说明第一行}
->{发布说明第二行}
+{发布说明}
 ```
 
-预发布时第二行为：
+标题合并 name 与 tag，name 已含 tag 时不再重复；合并后的标题没有仓库短名时前置短名，已有时保留。
 
-```markdown
-{emoji} *Release* · {中文状态} · 预发布 · [{操作人}]({操作人主页})
-```
+| repo | Release name | Tag | 可点击标题 |
+| --- | --- | --- | --- |
+| Miaopu | `Miaopu 2.3.3` | `2.3.3` | `Miaopu 2.3.3` |
+| Miaopu | `2.3.3` | `2.3.3` | `Miaopu 2.3.3` |
+| Miaopu | `Spring update` | `v1.2.3` | `Miaopu Spring update · v1.2.3` |
+| Miaopu | 空 | `2.3.3` | `Miaopu 2.3.3` |
+| Miaopu | 空 | 空 | `Miaopu Release` |
 
-标题与版本号的合并规则：
+Name 最多 250 字符，tag 最多 180 字符；发布说明最多 2400 字符，并受总长度限制。
 
-| Release name | Tag | 最终可点击文本 |
-| --- | --- | --- |
-| `Miaopu 2.3.3` | `2.3.3` | `Miaopu 2.3.3` |
-| `2.3.3` | `2.3.3` | `2.3.3` |
-| `Spring update` | `v1.2.3` | `Spring update · v1.2.3` |
-| 空 | `2.3.3` | `2.3.3` |
-| `Spring update` | 空 | `Spring update` |
-| 空 | 空 | `Release` |
-
-Release name 最多 250 字符，Tag 最多 180 字符；name 已包含 Tag 文本时不再追加。发布说明最多 2400 字符，并受总长度限制。
-
-| GitHub action | 显示的状态 |
+| action | 标题文字 |
 | --- | --- |
-| `published` | 已发布 |
-| `released` | 已发布 |
-| `prereleased` | 已发布，另加 `预发布` 标记 |
-| `created` | 已创建 |
-| `edited` | 已更新 |
-| `deleted` | 已删除 |
-| `unpublished` | 已撤回 |
-| 其他 action | 原样显示 |
+| `published` / `released` / `prereleased` / `created` | `New release` |
+| `edited` | `Updated release` |
+| `deleted` | `Deleted release` |
+| `unpublished` | `Unpublished release` |
+| 其他或缺失 | `Updated release` |
 
-Release emoji 按以下顺序判定：
+草稿时把 `release` 替换为 `draft release`；预发布（含 `prereleased`）替换为 `pre-release`，草稿优先。例如 `New pre-release`。
 
-| 条件 | emoji |
-| --- | --- |
-| action 为 `deleted` | 🗑️ |
-| action 为 `edited` | ✏️ |
-| action 为 `unpublished` | 📥 |
-| 是草稿 | 📝 |
-| 是预发布，或 action 为 `prereleased` | 🧪 |
-| action 为 `created` | 📦 |
-| 其他发布动作 | 🚀 |
+Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 草稿 📝 → 预发布 🧪 → `created` 📦 → 其他 🚀。
 
 ### 3.5 评论
 
 支持 `issue_comment`、`commit_comment`、`pull_request_review_comment`。
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *[{对象类型} 评论]({评论链接})* · {action} · [{操作人}]({操作人主页})
+💬 *New comment on* [{repo}#{编号} {Issue或PR标题}]({评论链接})
+by [@{操作人}]({操作人主页})
 
-*{所属Issue或PR标题}*
-
->{评论第一行}
->{评论第二行}
+{评论正文}
 ```
 
-- 对象类型为 `Issue`、`PR` 或 `Commit`；标题不存在时省略标题块。
-- 所属标题最多 250 字符，评论最多 2000 字符，并受总长度限制。
-- 默认 💬，编辑 ✏️，删除 🗑️；动作仍显示 `created`、`edited`、`deleted` 等英文值。
+Commit 评论的对象链接文字为 `{repo}@{短哈希}`；缺失哈希时仅使用仓库短名。链接直接定位该评论。标题最多 250 字符，评论最多 2000 字符，并受总长度限制。
+
+| action | 标题文字 | emoji |
+| --- | --- | --- |
+| `created` | `New comment on` | 💬 |
+| `edited` | `Updated comment on` | ✏️ |
+| `deleted` | `Deleted comment on` | 🗑️ |
+| 未映射或缺失 | `Comment updated on` | 💬 |
 
 ### 3.6 PR Review
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *[PR #{编号} Review]({Review链接})* · {review状态} · {action} · [{操作人}]({操作人主页})
+✅ *Approved pull request* [{repo}#{编号} {PR标题}]({Review链接})
+by [@{操作人}]({操作人主页})
 
-*{PR标题}*
-
->{审查正文第一行}
->{审查正文第二行}
+{审查正文}
 ```
 
-PR 标题最多 250 字符，审查正文最多 2000 字符，并受总长度限制。Review 状态和 action 目前原样显示，例如 `approved · submitted`。
+标题最多 250 字符，正文最多 2000 字符，并受总长度限制。
 
-| 条件，按优先级排列 | emoji |
-| --- | --- |
-| action 为 `dismissed` | 🚫 |
-| action 为 `edited` | ✏️ |
-| review 状态为 `approved` | ✅ |
-| review 状态为 `changes_requested` | 🛠️ |
-| review 状态为 `commented` | 💬 |
-| review 状态为 `dismissed` | 🚫 |
-| 其他状态 | 🔍 |
+| 条件，按优先级排列 | 标题文字 | emoji |
+| --- | --- | --- |
+| action `dismissed` | `Dismissed review on` | 🚫 |
+| action `edited` | `Updated review on` | ✏️ |
+| state `approved` | `Approved pull request` | ✅ |
+| state `changes_requested` | `Changes requested on` | 🛠️ |
+| state `commented` | `New review on` | 💬 |
+| state `dismissed` | `Dismissed review on` | 🚫 |
+| 其他或缺失 | `New review on` | 🔍 |
 
 ### 3.7 Actions
 
-只在 `workflow_run` 的 action 为 `completed` 时通知。
+仅 `workflow_run` 的 action 为 `completed` 时通知。
 
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-{emoji} *[Actions]({运行详情链接})* · {conclusion} · [{操作人}]({操作人主页})
-
-*{工作流名称}* · {分支名}
+✅ *Workflow succeeded* [{repo}:{分支} · {工作流名称} #{运行编号}]({运行详情链接})
+by [@{操作人}]({操作人主页})
 ```
 
-工作流名称最多 200 字符，分支名最多 150 字符；缺失字段及多余分隔符省略。结论目前保留英文。
+分支最多 150 字符，工作流名称最多 200 字符，运行编号最多 20 字符。缺失字段及其分隔符省略。
 
-| conclusion | emoji |
-| --- | --- |
-| `success` | ✅ |
-| `failure` / `startup_failure` | ❌ |
-| `timed_out` | ⏱️ |
-| `cancelled` | ⏹️ |
-| `skipped` | ⏭️ |
-| `neutral` | ➖ |
-| `action_required` | ⚠️ |
-| `stale` | ⌛ |
-| 其他或缺失 | ⚙️ |
+| conclusion | 标题文字 | emoji |
+| --- | --- | --- |
+| `success` | `Workflow succeeded` | ✅ |
+| `failure` | `Workflow failed` | ❌ |
+| `startup_failure` | `Workflow failed to start` | ❌ |
+| `timed_out` | `Workflow timed out` | ⏱️ |
+| `cancelled` | `Workflow cancelled` | ⏹️ |
+| `skipped` | `Workflow skipped` | ⏭️ |
+| `neutral` | `Workflow completed with neutral result` | ➖ |
+| `action_required` | `Workflow requires action` | ⚠️ |
+| `stale` | `Workflow became stale` | ⌛ |
+| 其他或缺失 | `Workflow completed` | ⚙️ |
 
 ### 3.8 Star
 
-新增：
-
 ```markdown
-*[{owner}/{repo}]({仓库链接})*
-⭐ *[Star]({仓库stargazers链接})* · created · [{操作人}]({操作人主页})
+⭐ *New star on* [{repo}]({仓库stargazers链接})
+by [@{操作人}]({操作人主页})
 ```
 
-取消：
-
-```markdown
-*[{owner}/{repo}]({仓库链接})*
-⭐➖ *[Star]({仓库stargazers链接})* · deleted · [{操作人}]({操作人主页})
-```
-
-其他 action 原样显示，使用 ⭐。
+取消 Star 时首行改为 `⭐➖ *Star removed from* [{repo}]({仓库stargazers链接})`。
 
 ### 3.9 Fork
 
 ```markdown
-*[{owner}/{repo}]({原仓库链接})*
-🌿 *[Fork]({新Fork仓库链接})* · [{操作人}]({操作人主页})
+🌿 *New fork of* [{repo}]({原仓库链接})
+by [@{操作人}]({操作人主页})
+
+[{Fork的owner/repo}]({Fork仓库链接})
 ```
 
-没有额外正文，也不显示 action。
+Fork 完整名称最多 150 字符；缺失名称或有效链接时省略最后一段。
 
 ## 4. 命令回复中的公共字段
 
@@ -604,7 +565,7 @@ GitHub → Telegram
 
 ## 9. 审阅时可重点调整的当前文案
 
-- 事件名称目前仍是 `Push`、`Force push`、`Issue`、`PR`、`Release`、`Review`、`Actions`、`Star`、`Fork`。
-- Release 的动作已中文化；其他事件的动作、Review 状态、Actions 结论仍显示英文。
+- 通知使用简洁英文事件描述；所有类型的最终模板与动作分支见第 3 节。
+- 管理命令回复使用中文，通知使用 GitHubBot 风格的英文文案。
 - `/status` 的投递状态仍显示英文。
-- 同一条通知只保留正文摘要；完整内容通过行内链接查看。
+- 长正文展示摘要，完整内容通过行内链接查看；Push 展示全部收到的提交，超长分页。

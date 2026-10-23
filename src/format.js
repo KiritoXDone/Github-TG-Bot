@@ -29,7 +29,6 @@ const md = (value) => value.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
 const line = (value, max) => clip(value, max).replace(/\s+/g, ' ').trim();
 const bold = (value) => value ? `*${md(value)}*` : '';
 const href = (label, target) => `[${md(label)}](${target.replace(/[)\\]/g, '\\$&')})`;
-const quote = (value) => value ? md(value).split('\n').map((s) => `>${s}`).join('\n') : '';
 const MAX_MESSAGE = 3900;
 
 const CHANGE_EMOJI = {
@@ -37,10 +36,6 @@ const CHANGE_EMOJI = {
   assigned: '👤', unassigned: '👤', labeled: '🏷️', unlabeled: '🏷️',
   locked: '🔒', unlocked: '🔓', pinned: '📌', unpinned: '📌',
   milestoned: '🎯', demilestoned: '🎯', transferred: '📦',
-};
-const RELEASE_ACTIONS = {
-  published: '已发布', released: '已发布', prereleased: '已发布',
-  created: '已创建', edited: '已更新', deleted: '已删除', unpublished: '已撤回',
 };
 const pickEmoji = (mapping, key, fallback) => Object.hasOwn(mapping, key) ? mapping[key] : fallback;
 
@@ -50,16 +45,16 @@ function eventEmoji(event, p) {
       if (p.deleted) return '🗑️';
       if (p.forced) return '⚠️';
       if (p.ref?.startsWith('refs/tags/')) return '🏷️';
-      return p.created ? '🌱' : '📤';
+      return p.created ? '🌱' : '🔨';
     case 'issues':
       if (p.action === 'closed') {
         return pickEmoji({ completed: '✅', not_planned: '🚫' }, p.issue?.state_reason, '🔴');
       }
-      return pickEmoji(CHANGE_EMOJI, p.action, '🎫');
+      return pickEmoji(CHANGE_EMOJI, p.action, '🐛');
     case 'pull_request':
       if (p.action === 'closed') return p.pull_request?.merged ? '🔀' : '🚫';
       if (p.action === 'converted_to_draft' || (p.action === 'opened' && p.pull_request?.draft)) return '📝';
-      return pickEmoji({ ...CHANGE_EMOJI, synchronize: '🔄', ready_for_review: '🔍', review_requested: '🔍' }, p.action, '🔃');
+      return pickEmoji({ ...CHANGE_EMOJI, synchronize: '🔄', ready_for_review: '🔍', review_requested: '🔍' }, p.action, '🔌');
     case 'release':
       if (p.action === 'deleted' || p.action === 'edited') return CHANGE_EMOJI[p.action];
       if (p.action === 'unpublished') return '📥';
@@ -84,6 +79,55 @@ function eventEmoji(event, p) {
   }
 }
 
+// Match the observed GitHubBot layouts. Other event types use the same compact
+// language and structure; they are not claimed to reproduce undocumented text.
+function activity(action, noun) {
+  const verbs = {
+    opened: 'New', created: 'New', closed: 'Closed', reopened: 'Reopened', edited: 'Updated',
+    deleted: 'Deleted', assigned: 'Assigned', unassigned: 'Unassigned', labeled: 'Labeled',
+    unlabeled: 'Unlabeled', locked: 'Locked', unlocked: 'Unlocked', pinned: 'Pinned', unpinned: 'Unpinned',
+    milestoned: 'Added milestone to', demilestoned: 'Removed milestone from', transferred: 'Transferred',
+    typed: 'Changed type of', untyped: 'Removed type from',
+  };
+  return Object.hasOwn(verbs, action) ? `${verbs[action]} ${noun}` : `${noun[0].toUpperCase()}${noun.slice(1)} updated`;
+}
+
+function pullRequestActivity(p) {
+  if (p.action === 'closed' && p.pull_request.merged) return 'Merged pull request';
+  if (p.action === 'opened' && p.pull_request.draft) return 'New draft pull request';
+  const phrases = {
+    synchronize: 'Updated pull request', converted_to_draft: 'Converted to draft',
+    ready_for_review: 'Pull request ready for review', review_requested: 'Review requested for',
+    review_request_removed: 'Review request removed from',
+    auto_merge_enabled: 'Auto-merge enabled for', auto_merge_disabled: 'Auto-merge disabled for',
+    enqueued: 'Added pull request to merge queue', dequeued: 'Removed pull request from merge queue',
+  };
+  return Object.hasOwn(phrases, p.action) ? phrases[p.action] : activity(p.action, 'pull request');
+}
+
+function releaseActivity(p) {
+  const kind = p.release.draft ? 'draft release'
+    : p.release.prerelease || p.action === 'prereleased' ? 'pre-release' : 'release';
+  const verbs = { published: 'New', released: 'New', prereleased: 'New', created: 'New',
+    edited: 'Updated', deleted: 'Deleted', unpublished: 'Unpublished' };
+  return `${Object.hasOwn(verbs, p.action) ? verbs[p.action] : 'Updated'} ${kind}`;
+}
+
+function reviewActivity(p) {
+  if (p.action === 'dismissed') return 'Dismissed review on';
+  if (p.action === 'edited') return 'Updated review on';
+  const phrases = { approved: 'Approved pull request', changes_requested: 'Changes requested on',
+    commented: 'New review on', dismissed: 'Dismissed review on' };
+  return Object.hasOwn(phrases, p.review.state) ? phrases[p.review.state] : 'New review on';
+}
+
+function workflowActivity(conclusion) {
+  const phrases = { success: 'Workflow succeeded', failure: 'Workflow failed', startup_failure: 'Workflow failed to start',
+    timed_out: 'Workflow timed out', cancelled: 'Workflow cancelled', skipped: 'Workflow skipped',
+    neutral: 'Workflow completed with neutral result', action_required: 'Workflow requires action', stale: 'Workflow became stale' };
+  return Object.hasOwn(phrases, conclusion) ? phrases[conclusion] : 'Workflow completed';
+}
+
 function fit(value, budget, render) {
   if (render(value).length <= budget) return render(value);
   let low = 0;
@@ -98,18 +142,22 @@ function fit(value, budget, render) {
 
 function pushMessages(header, commits, repoUrl) {
   if (!commits.length) return [header];
-  const pageLabel = (page, total) => `第 ${page}/${total} 页 · 共 ${commits.length} 个提交`;
+  const pageLabel = (page, total) => `Page ${page}/${total}`;
   // A page holds at least one commit. Reserve the largest possible page label
   // before splitting so adding page numbers cannot overflow the final message.
   const budget = MAX_MESSAGE - header.length - pageLabel(commits.length, commits.length).length - 3;
   const pages = [];
   let current = '';
-  for (const c of commits) {
+  for (const commit of commits) {
+    const c = commit || {};
     const commitUrl = url(c.url) || (/^[a-f\d]{7,40}$/i.test(c.id || '') ? `${repoUrl}/commit/${c.id}` : `${repoUrl}/commits`);
     const shortId = line(c.id, 80).slice(0, 7).replace(/[\uD800-\uDBFF]$/, '');
-    const prefix = `• ${href(shortId || 'commit', commitUrl)} `;
+    const prefix = `${href(shortId || 'commit', commitUrl)}: `;
     const message = line(typeof c.message === 'string' ? c.message.split('\n')[0] : '', 180);
-    const entry = prefix + fit(message, budget - prefix.length, md);
+    // The commit author can differ from the user who pushed the branch.
+    const author = line(c.author?.name, 80) || line(c.author?.username, 80) || 'Unknown author';
+    const suffix = ` by ${md(author)}`;
+    const entry = prefix + fit(message, budget - prefix.length - suffix.length, md) + suffix;
     if (current && current.length + entry.length + 1 > budget) {
       pages.push(current);
       current = '';
@@ -124,89 +172,99 @@ export function formatEvent(event, p) {
   const repo = repoName(p.repository?.full_name);
   if (!repo) return null;
   const repoUrl = `https://github.com/${repo}`;
+  const project = p.repository.full_name.split('/')[1];
   const actor = line(p.sender?.login || 'GitHub', 80);
-  const actorLabel = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)
-    ? href(actor, `https://github.com/${actor}`) : md(actor);
-  const project = `*${href(p.repository.full_name, repoUrl)}*`;
+  const actorUrl = url(p.sender?.html_url) || (/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor) ? `https://github.com/${actor}` : '');
+  const actorLabel = actorUrl ? href(`@${actor}`, actorUrl) : md(`@${actor}`);
   const emoji = eventEmoji(event, p);
   let category;
   let title;
-  let subject = '';
   let body = '';
-  const action = md(line(p.action, 60));
-  const linkedTitle = (emoji, label, target, state = action) =>
-    `${emoji} *${href(label, url(target) || repoUrl)}*${state ? ` · ${state}` : ''}`;
+  let details = '';
+  let by = 'by';
+  const linkedTitle = (phrase, label, target) => `${emoji} ${bold(phrase)} ${href(label, url(target) || repoUrl)}`;
+  const issueLabel = (issue) => `${project}#${line(String(issue.number ?? p.number ?? '?'), 20)}${issue.title ? ` ${line(issue.title, 250)}` : ''}`;
 
   switch (event) {
     case 'push': {
       category = 'commits';
       const ref = line(p.ref, 180).replace(/^refs\/(heads|tags)\//, '') || 'branch';
       const commits = Array.isArray(p.commits) ? p.commits : [];
-      const label = p.deleted ? (p.ref?.startsWith('refs/tags/') ? '删除标签' : '删除分支') : p.forced ? 'Force push' : 'Push';
-      title = `${emoji} *${label}* · ${href(ref, url(p.compare) || repoUrl)}`;
-      return { repo, category, messages: pushMessages(`${project}\n${title} · ${actorLabel}`, commits, repoUrl), parse_mode: 'MarkdownV2' };
+      const isTag = p.ref?.startsWith('refs/tags/');
+      const kind = isTag ? 'tag' : 'branch';
+      if (p.deleted || (p.created && !commits.length)) {
+        const target = p.deleted ? repoUrl : `${repoUrl}/tree/${encodeURIComponent(ref)}`;
+        title = linkedTitle(`${p.deleted ? 'Deleted' : 'New'} ${kind}`, `${project}:${ref}`, target);
+        title += `\nby ${actorLabel}`;
+      } else {
+        title = `🔨 ${href(`${commits.length} new commit${commits.length === 1 ? '' : 's'}`, url(p.compare) || repoUrl)} to ${bold(`${project}:${ref}`)}:`;
+        if (p.forced) title += `\n⚠️ Forced push by ${actorLabel}`;
+        else if (p.created || isTag) title += `\n${isTag ? '🏷️' : '🌱'} ${p.created ? 'New' : 'Updated'} ${kind} by ${actorLabel}`;
+      }
+      return { repo, category, messages: pushMessages(title, commits, repoUrl), parse_mode: 'MarkdownV2' };
     }
     case 'issues':
       if (!p.issue) return null;
       category = 'issues';
-      title = linkedTitle(emoji, `Issue #${line(String(p.issue.number ?? '?'), 20)}`, p.issue.html_url);
-      subject = bold(line(p.issue.title, 250));
+      title = linkedTitle(activity(p.action, 'issue'), issueLabel(p.issue), p.issue.html_url);
       body = clip(p.issue.body, 1200);
       break;
     case 'pull_request':
       if (!p.pull_request) return null;
       category = 'pr';
-      title = linkedTitle(emoji, `PR #${line(String(p.pull_request.number ?? p.number ?? '?'), 20)}`,
-        p.pull_request.html_url, p.action === 'closed' && p.pull_request.merged ? 'merged' : action);
-      subject = bold(line(p.pull_request.title, 250));
-      if (p.pull_request.head?.ref && p.pull_request.base?.ref) {
-        subject += `\n${md(line(p.pull_request.head.ref, 100))} → ${md(line(p.pull_request.base.ref, 100))}`;
-      }
+      title = linkedTitle(pullRequestActivity(p), issueLabel(p.pull_request), p.pull_request.html_url);
+      by = 'by:';
       body = clip(p.pull_request.body, 1200);
       break;
     case 'release': {
       if (!p.release) return null;
       category = 'release';
-      const state = Object.hasOwn(RELEASE_ACTIONS, p.action) ? RELEASE_ACTIONS[p.action] : action;
-      title = `${emoji} *Release*${state ? ` · ${state}` : ''}${p.release.prerelease || p.action === 'prereleased' ? ' · 预发布' : ''}`;
       const name = line(p.release.name, 250);
       const tag = line(p.release.tag_name, 180);
       const label = name && tag && !name.includes(tag) ? `${name} · ${tag}` : name || tag || 'Release';
-      subject = `*${href(label, url(p.release.html_url) || `${repoUrl}/releases`)}*`;
+      const subject = label.toLowerCase().includes(project.toLowerCase()) ? label : `${project} ${label}`;
+      title = linkedTitle(releaseActivity(p), subject, url(p.release.html_url) || `${repoUrl}/releases`);
       body = clip(p.release.body, 2400);
       break;
     }
     case 'issue_comment':
     case 'commit_comment':
-    case 'pull_request_review_comment':
+    case 'pull_request_review_comment': {
       if (!p.comment) return null;
       category = 'comments';
-      title = linkedTitle(emoji, `${p.issue?.pull_request || p.pull_request ? 'PR' : p.issue ? 'Issue' : 'Commit'} 评论`, p.comment.html_url);
-      subject = bold(line(p.issue?.title || p.pull_request?.title, 250));
+      const issue = p.issue || p.pull_request;
+      const commit = line(p.comment.commit_id, 80).slice(0, 7);
+      const subject = issue ? issueLabel(issue) : `${project}${commit ? `@${commit}` : ''}`;
+      title = linkedTitle(`${activity(p.action, 'comment')} on`, subject, p.comment.html_url);
       body = clip(p.comment.body, 2000);
       break;
+    }
     case 'pull_request_review':
       if (!p.review || !p.pull_request) return null;
       category = 'reviews';
-      title = linkedTitle(emoji, `PR #${line(String(p.pull_request.number ?? '?'), 20)} Review`, p.review.html_url,
-        [md(line(p.review.state, 60)), action].filter(Boolean).join(' · '));
-      subject = bold(line(p.pull_request.title, 250));
+      title = linkedTitle(reviewActivity(p), issueLabel(p.pull_request), p.review.html_url);
       body = clip(p.review.body, 2000);
       break;
-    case 'workflow_run':
+    case 'workflow_run': {
       if (p.action !== 'completed' || !p.workflow_run) return null;
       category = 'actions';
-      title = linkedTitle(emoji, 'Actions', p.workflow_run.html_url, md(line(p.workflow_run.conclusion, 60)));
-      subject = [bold(line(p.workflow_run.name, 200)), md(line(p.workflow_run.head_branch, 150))].filter(Boolean).join(' · ');
+      const branch = line(p.workflow_run.head_branch, 150);
+      const name = line(p.workflow_run.name, 200);
+      const run = p.workflow_run.run_number == null ? '' : ` #${line(String(p.workflow_run.run_number), 20)}`;
+      const subject = `${project}${branch ? `:${branch}` : ''}${name ? ` · ${name}` : ''}${run}`;
+      title = linkedTitle(workflowActivity(p.workflow_run.conclusion), subject, p.workflow_run.html_url);
       break;
+    }
     case 'star':
-      category = 'stars'; title = linkedTitle(emoji, 'Star', `${repoUrl}/stargazers`); break;
+      category = 'stars'; title = linkedTitle(p.action === 'deleted' ? 'Star removed from' : 'New star on', project, `${repoUrl}/stargazers`); break;
     case 'fork':
-      category = 'forks'; title = linkedTitle(emoji, 'Fork', p.forkee?.html_url, ''); break;
+      category = 'forks'; title = linkedTitle('New fork of', project, repoUrl);
+      if (p.forkee?.full_name && url(p.forkee.html_url)) details = href(line(p.forkee.full_name, 150), url(p.forkee.html_url));
+      break;
     default: return null;
   }
-  let text = `${project}\n${title} · ${actorLabel}`;
-  if (subject) text += `\n\n${subject}`;
-  if (body.trim()) text += `\n\n${fit(body.trim(), MAX_MESSAGE - text.length - 2, quote)}`;
+  let text = `${title}\n${by} ${actorLabel}`;
+  if (details) text += `\n\n${details}`;
+  if (body.trim()) text += `\n\n${fit(body.trim(), MAX_MESSAGE - text.length - 2, md)}`;
   return { repo, category, messages: [text], parse_mode: 'MarkdownV2' };
 }

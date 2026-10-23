@@ -17,8 +17,8 @@
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
 - Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
-- 通知使用 MarkdownV2：第一行是加粗、可点击的 `owner/repo`，第二行显示事件类型与操作人；引用正文，版本号、Issue/PR 编号和提交哈希可点击，不单独附加裸链接；正文特殊字符安全转义。
-- Release 标题与版本号合并为一个链接；标题已包含版本号时不再重复显示，发布、更新、撤回等状态使用中文。
+- 通知使用 GitHubBot 风格的 MarkdownV2 排版：首行是事件和对象链接，作者另起一行，正文直接展示；Push 用提交数量链接到 Compare，每条提交显示短哈希、摘要和作者。正文特殊字符安全转义。
+- Release 标题与版本号合并为一个链接；各类状态使用简洁英文描述，如 `New release`、`Merged pull request`、`Workflow succeeded`。Issue、PR、评论、Push 参考公开样例，其余事件沿用同一风格；当前不支持回复通知向 GitHub 发布评论。
 - 完整文案与通知格式见 [当前消息文本模板](docs/message-templates.md)。
 - `/status` 检查投递状态，`/retry` 重试失败消息。
 - 零运行时 npm 依赖；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
@@ -181,9 +181,9 @@ npm run telegram:setup
 
 | 类型 | GitHub Webhook 事件 | 行为 |
 | --- | --- | --- |
-| `issues` | `issues` | 🎫 Issue；✅ 完成、🚫 不计划处理、🔴 其他关闭、🔄 重开 |
-| `pr` | `pull_request` | 🔃 创建、📝 草稿、🔄 同步、🔀 合并、🚫 未合并关闭 |
-| `commits` | `push` | 📤 提交摘要、🌱 新分支、🏷️ 标签、⚠️ 强推、🗑️ 删除分支/标签 |
+| `issues` | `issues` | 🐛 Issue；✅ 完成、🚫 不计划处理、🔴 其他关闭、🔄 重开 |
+| `pr` | `pull_request` | 🔌 创建、📝 草稿、🔄 同步、🔀 合并、🚫 未合并关闭 |
+| `commits` | `push` | 🔨 提交摘要与作者、🌱 新分支、🏷️ 标签、⚠️ 强推、🗑️ 删除分支/标签 |
 | `release` | `release` | 🚀 发布、🧪 预发布、📝 草稿、📦 创建、📥 撤回发布 |
 | `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | 💬 评论、✏️ 编辑、🗑️ 删除 |
 | `reviews` | `pull_request_review` | 🔍 审查、✅ 批准、🛠️ 请求修改、💬 意见、🚫 撤销审查 |
@@ -191,7 +191,7 @@ npm run telegram:setup
 | `stars` | `star` | ⭐ Star、⭐➖ 取消 Star |
 | `forks` | `fork` | 🌿 Fork |
 
-`commits` 按一次 Push 汇总所有收到的提交，不限制为前几条；超出消息长度时自动分成带页码的多条消息，哈希和链接保持完整。每个提交仍展示第一行摘要（最多 180 字符）。不同 Push 分别处理，不按分钟聚合。GitHub 自身的 Push Webhook 最多包含 2048 个提交；本实现展示 Webhook 中实际包含的全部条目，不通过 GitHub API 补取超出部分。[GitHub Push 负载说明](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
+`commits` 按一次 Push 汇总所有收到的提交，不限制为前几条；超出消息长度时自动分成带页码的多条消息，哈希和链接保持完整。每个提交展示第一行摘要（最多 180 字符）和作者（最多 80 字符），不使用推送者替代提交作者。不同 Push 分别处理，不按分钟聚合。GitHub 自身的 Push Webhook 最多包含 2048 个提交；本实现展示 Webhook 中实际包含的全部条目，不通过 GitHub API 补取超出部分。[GitHub Push 负载说明](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
 
 事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
 
