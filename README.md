@@ -8,7 +8,9 @@
 
 ## 功能
 
-- `/sub owner/repo` 订阅；按聊天和群话题分别管理订阅及事件类型。
+- `/sub owner/repo` 订阅；个人、群聊、群话题、频道分别管理订阅及事件类型。
+- 私聊中使用 `--to me`、`--to @频道名`、`--to 群ID` 指定通知目标；无需修改 Cloudflare 配置。
+- `/targets` 查看通知目标，`/target add` 连接目标，`/target remove` 停用目标并清理其订阅。
 - 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。
 - GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
@@ -24,7 +26,7 @@ flowchart LR
   W --> D[(D1 订阅 / 去重 / 发送队列)]
   D --> S[发送通知]
   C[每分钟 Cron] --> S
-  S --> T[Telegram 私聊 / 群 / 话题]
+  S --> T[Telegram 私聊 / 群 / 话题 / 频道]
 ```
 
 ## 部署
@@ -73,11 +75,13 @@ npx wrangler secret put BOT_USERNAME
 | `GITHUB_WEBHOOK_SECRET` | GitHub Webhook 的 Secret；本实例各目标仓库使用相同值 |
 | `ALLOWED_USER_IDS` | 允许管理机器人的 Telegram 数字用户 ID，逗号分隔 |
 | `BOT_USERNAME` | Bot 的用户名，不含 `@` |
-| `ALLOWED_CHAT_IDS` | 可选；允许收发通知的聊天 ID，逗号分隔 |
+| `ALLOWED_CHAT_IDS` | 可选；兼容旧版本的预先允许聊天 ID，逗号分隔 |
 
-`ALLOWED_CHAT_IDS` 未设置或为空时，只允许 `ALLOWED_USER_IDS` 对应用户的私聊。要启用群组，使用 `npx wrangler secret put ALLOWED_CHAT_IDS`，填入例如 `123456789,-1001234567890`。**设置后会替代默认私聊列表**，因此希望继续使用的私聊 ID 也要列出。
+`ALLOWED_CHAT_IDS` 未设置或为空时，初始允许 `ALLOWED_USER_IDS` 对应用户的私聊。现在可以直接在 Telegram 中使用 `/sub ... --to ...` 或 `/target add ...`，验证权限后把群/频道存入 D1，无需修改这个 Secret。已有静态白名单和旧订阅继续生效。
 
-允许的用户可以管理所有允许聊天中的订阅；本项目按个人/受信任团队使用设计，不做多租户权限隔离。把私有仓库推送到群组时，群成员会看到通知内容。
+动态目标与旧静态名单同时生效；删除静态名单中的 ID 不会撤销已动态连接的目标。停用目标应使用 `/target remove 聊天ID`，停用状态会覆盖旧静态白名单。
+
+只有 `ALLOWED_USER_IDS` 中的用户能管理机器人。连接群/频道及为其执行 `/sub` 时，用户和 Bot 都必须是该群/频道的管理员；频道还要求 Bot 拥有发布消息权限。已连接目标按受信任管理团队共享，不做多租户隔离；个人目标只能管理自己的私聊。把私有仓库推送到群/频道时，其成员会看到通知内容。
 
 ### 3. 注册 Telegram Webhook
 
@@ -100,11 +104,31 @@ npm run telegram:setup
 在 Bot 私聊中发送：
 
 ```text
-/sub KiritoXDone/Github-TG-Bot
+/sub KiritoXDone/Miaopu --to me
 /list
 ```
 
-群组使用：把 Bot 加入群，配置 `ALLOWED_CHAT_IDS`，然后由允许的用户在目标群/话题发送 `/sub@你的Bot用户名 owner/repo`。无需关闭 Telegram 隐私模式。通知会发送到执行订阅命令的同一个话题，Bot 需要在该群中拥有发送消息权限。
+**群聊**：把 Bot 加入群并设为管理员。由同时拥有该群管理员权限的允许用户，在目标群/话题发送 `/sub@你的Bot用户名 owner/repo`。首次订阅会自动连接该群，无需关闭 Telegram 隐私模式。也可以先发送 `/target@你的Bot用户名 add here`，回复会包含群 ID。
+
+**频道**：把 Bot 加为频道管理员并启用发布消息权限，在 Bot 私聊中发送：
+
+```text
+/sub KiritoXDone/Miaopu release --to @your_channel
+```
+
+公共频道可使用 `@频道用户名`；私有频道使用数字 ID，例如 `--to -1001234567890`。Bot 会通过 Telegram 查询权限，保存稳定的数字 ID。频道更换用户名后，已有通知仍投递到原频道。频道发帖通常不提供可靠的操作者身份，因此管理命令在 Bot 私聊中执行。
+
+**从私聊管理群话题**：
+
+```text
+/sub KiritoXDone/Miaopu issues,pr --to -1001234567890 --topic 42
+/list --to -1001234567890 --topic 42
+/targets
+```
+
+`--topic` 仅支持开启话题的超级群。省略 `--to` 时，默认使用发送命令的聊天和话题；显式指定远程目标但省略 `--topic` 时，使用该目标的默认聊天位置。同一仓库可同时订阅到多个目标，事件筛选分别保存。私聊中执行的远程管理，其结果回复到私聊，不会把管理信息发到频道。
+
+群内命令只管理本群；查看所有目标或管理其他聊天，请使用 Bot 私聊。未连接群的错误提示会私发给操作者，所以请先和 Bot 私聊发送 `/start`。
 
 ### 5. 添加 GitHub Webhook
 
@@ -127,7 +151,7 @@ npm run telegram:setup
 | 命令 | 用途 |
 | --- | --- |
 | `/start`、`/help` | 使用说明 |
-| `/sub owner/repo [events]` | 新增或替换本聊天/话题的订阅；省略事件使用默认四类 |
+| `/sub owner/repo [events] [--to 目标] [--topic ID]` | 新增或替换指定目标的订阅；省略事件使用默认四类 |
 | `/subscribe owner/repo [events]` | `/sub` 的别名 |
 | `/unsub owner/repo` | 取消订阅及其待发/失败通知；已在发送中的消息可能仍到达 |
 | `/unsubscribe owner/repo` | `/unsub` 的别名 |
@@ -135,12 +159,20 @@ npm run telegram:setup
 | `/list` | 查看本聊天/话题的订阅 |
 | `/status` | 本聊天/话题的投递统计及 ID |
 | `/retry` | 将本聊天/话题的失败通知重新入队 |
+| `/targets` | 在私聊中查看个人、群聊、频道目标及启用状态 |
+| `/target add me\|here\|@频道名\|聊天ID` | 验证权限并连接目标；`/sub` 也可自动连接 |
+| `/target remove me\|here\|@频道名\|聊天ID` | 停用整个目标，删除其所有话题的订阅并取消待发/失败通知 |
+
+`/unsub`、`/events`、`/list`、`/status`、`/retry` 均支持 `--to` 和 `--topic`。`/unsub` 只影响一个目标/话题中的指定仓库；`/target remove` 影响整个目标，不影响其他目标。重新 `/target add` 会启用目标，但不会恢复已经删除的订阅。
 
 ```text
 /sub owner/repo issues,pr,commits,release
 /sub owner/repo all
 /events owner/repo release,actions
 /unsub owner/repo
+/events owner/repo release --to @your_channel
+/unsub owner/repo --to @your_channel
+/target remove -1001234567890
 ```
 
 | 类型 | GitHub Webhook 事件 | 行为 |
@@ -166,8 +198,8 @@ npm run telegram:setup
 - 成功/取消通知会清空正文；失败通知保留正文以便重试。Cron 每天 UTC 03:00 清理超过 30 天的已结束消息和去重记录，待发消息保留到处理结束。
 - 每个聊天/话题最多订阅 50 个仓库。单个 GitHub Payload 上限 1 MiB、Telegram Payload 上限 256 KiB，超限返回 413。大量 Push 等大型负载需要按实际情况调整源码上限。
 - Cron 每分钟最多处理 20 条，Webhook 到达时另尝试处理 10 条。适合个人和小团队；吞吐较高时可改用 Cloudflare Queues。Workers、D1 和 Cron 的使用量以 Cloudflare 账户实际计费与配额为准。
-- 撤销聊天白名单会阻止后续发送，但已经开始发送的消息可能到达。修改白名单后也应按需要清理不再使用的订阅。
-- 当前不处理 Telegram 频道发帖命令、匿名管理员命令或群升级后的 chat ID 自动迁移；群升级后应更新白名单，并在新群重新订阅。
+- `/target remove` 会清理该目标订阅并取消待发/失败消息；已经开始发送的消息可能到达。个人通知目标停用后，仍能在私聊使用管理命令重新连接。
+- 当前不处理 Telegram 频道发帖命令、匿名管理员命令或群升级后的 chat ID 自动迁移；群升级后请移除旧目标，再连接新群并重新订阅。
 
 ## 本地开发与验证
 
@@ -181,11 +213,11 @@ npm run db:local
 npm run dev
 ```
 
-`npm test` 使用 workerd 的真实 Worker 环境和 D1 SQL，覆盖签名/权限拒绝、订阅/话题路由、事件过滤、并发重复投递、429 重试、永久失败恢复等。测试会拦截所有 Telegram 出站请求，不使用真实 Bot Token。
+`npm test` 使用 workerd 的真实 Worker 环境和 D1 SQL，覆盖个人/群聊/频道隔离、频道发布权限、目标停用、旧订阅兼容、签名/权限拒绝、并发重复投递、429 重试及永久失败恢复等。测试会拦截所有 Telegram 出站请求，不使用真实 Bot Token。
 
 `npm run check` 还会执行 Wrangler 部署 dry-run，不上传 Worker。GitHub Actions 在 push/PR 时运行同样的检查。
 
-源码结构：`src/index.js` 处理 Webhook 和 Cron；`src/bot.js` 处理命令；`src/format.js` 格式化 GitHub 事件；`src/delivery.js` 发送与重试；`migrations/` 管理 D1 表结构。
+源码结构：`src/index.js` 处理 Webhook 和 Cron；`src/bot.js` 处理命令；`src/targets.js` 解析通知目标并检查 Telegram 权限；`src/format.js` 格式化 GitHub 事件；`src/delivery.js` 发送与重试；`migrations/` 管理 D1 表结构。
 
 部署采用上述 Wrangler 命令。Secrets 不放进代码、Wrangler vars、GitHub Issues 或日志；本地 `.dev.vars` 也不要提交。版本升级时先查看新迁移，再运行 `npm run db:remote` 和 `npm run deploy`。
 

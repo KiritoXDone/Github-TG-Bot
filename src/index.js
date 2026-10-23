@@ -15,7 +15,7 @@ export default {
       if (request.method !== (path === '/health' ? 'GET' : 'POST')) return json({ error: 'Method not allowed' }, 405);
       if (!configured(env)) return json({ error: 'Worker configuration incomplete' }, 503);
       if (path === '/health') {
-        await env.DB.prepare('SELECT 1 FROM subscriptions LIMIT 1').first();
+        await env.DB.prepare('SELECT 1 FROM subscriptions LEFT JOIN destinations USING (chat_id) LIMIT 1').first();
         return json({ ok: true });
       }
       if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new HttpError(415, 'Use application/json');
@@ -42,8 +42,8 @@ export default {
           statements.push(env.DB.prepare(`INSERT OR IGNORE INTO outbox
             (id, repo, chat_id, thread_id, text, next_attempt_at, created_at)
             SELECT ? || ':' || s.chat_id || ':' || s.thread_id, s.repo, s.chat_id, s.thread_id, ?, ?, ?
-            FROM subscriptions s WHERE s.repo = ?
-              AND s.chat_id IN (SELECT value FROM json_each(?))
+            FROM subscriptions s LEFT JOIN destinations d ON d.chat_id = s.chat_id WHERE s.repo = ?
+              AND (d.enabled = 1 OR (d.chat_id IS NULL AND s.chat_id IN (SELECT value FROM json_each(?))))
               AND EXISTS (SELECT 1 FROM json_each(s.events) WHERE value = ?)
               AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)`)
             .bind(id, notification.text, now, now, notification.repo, JSON.stringify(chats), notification.category, id, token));

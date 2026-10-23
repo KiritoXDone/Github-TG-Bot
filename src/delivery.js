@@ -1,4 +1,4 @@
-import { allowedChat } from './security.js';
+import { allowedChat, allowedUser } from './security.js';
 
 export async function flushOutbox(env, { limit = 10, now = Math.floor(Date.now() / 1000) } = {}) {
   const rows = await env.DB.prepare(`SELECT id FROM outbox
@@ -13,10 +13,13 @@ export async function flushOutbox(env, { limit = 10, now = Math.floor(Date.now()
 async function deliver(env, id, now) {
   const token = crypto.randomUUID();
   const row = await env.DB.prepare(`UPDATE outbox SET lease_until = ?, lease_token = ?, attempts = attempts + 1
-    WHERE id = ? AND status = 'pending' AND next_attempt_at <= ? AND lease_until <= ? RETURNING *`)
+    WHERE id = ? AND status = 'pending' AND next_attempt_at <= ? AND lease_until <= ?
+    RETURNING *, (SELECT enabled FROM destinations WHERE destinations.chat_id = outbox.chat_id) AS destination_enabled`)
     .bind(now + 120, token, id, now, now).first();
   if (!row) return; // Another request/cron invocation owns this delivery.
-  if (!allowedChat(env, row.chat_id)) {
+  const controlReply = row.repo === null && allowedUser(env, row.chat_id);
+  const destinationAllowed = row.destination_enabled === null ? allowedChat(env, row.chat_id) : row.destination_enabled === 1;
+  if (!controlReply && !destinationAllowed) {
     await finish(env.DB, id, token, 'cancelled', now, 'Destination removed from allowlist');
     return;
   }
