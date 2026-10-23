@@ -18,7 +18,7 @@ by [@KiritoXDone](https://github.com/KiritoXDone)
 ## 2. 所有通知共用的规则
 
 - 首行直接展示事件和带链接的对象，仓库使用短名 `repo`，保留 GitHub 大小写；没有独立的 `owner/repo` 标题行。
-- 普通 Push 在每条提交后显示提交作者。其他事件第二行为 `by @操作人`，PR 使用样例中的 `by: @操作人`。操作人链接到 GitHub 主页，Commit 作者使用 GitHub 提供的显示名称。
+- 普通 Push 在每条提交后显示提交作者。其他事件第二行为 `by @操作人`，PR 使用样例中的 `by: @操作人`。操作人链接到 GitHub 主页；Commit 作者保留显示名称，并链接到事件提供的作者 GitHub 账号，缺少有效账号时保留纯文本。
 - 事件使用英文描述，例如 `New issue`、`Merged pull request`、`New release`、`Workflow succeeded`。
 - 正文直接展示，保留换行；正文原有 Markdown 符号按文字转义，不作为 Telegram 格式执行，不整体包入引用块。
 - 对象标题、提交数量、哈希、作者使用行内链接，模板不额外附加原文 URL。正文中用户自行写入的 URL 仍作为原文保留。
@@ -56,11 +56,11 @@ by [@KiritoXDone](https://github.com/KiritoXDone)
 ```markdown
 🔨 [{数量} new commits]({比较链接}) to *{repo}:{分支名}*:
 
-[{短哈希1}]({提交链接1}): {提交摘要1} by {提交作者1}
-[{短哈希2}]({提交链接2}): {提交摘要2} by {提交作者2}
+[{短哈希1}]({提交链接1}): {提交摘要1} by [{提交作者1}]({作者主页1})
+[{短哈希2}]({提交链接2}): {提交摘要2} by [{提交作者2}]({作者主页2})
 ```
 
-单个提交使用 `1 new commit`。提交数量链接到本次 Push 的 compare 页面；缺失比较链接时跳转仓库。短哈希取前 7 个字符，摘要取第一行、最多 180 字符，作者取 `commit.author.name`，缺失时使用 `username`，再缺失则显示 `Unknown author`，不会用推送者冒充提交作者。作者最多 80 字符。
+单个提交使用 `1 new commit`。提交数量链接到本次 Push 的 compare 页面；缺失比较链接时跳转仓库。短哈希取前 7 个字符，摘要取第一行、最多 180 字符。作者取 `commit.author.name`，缺失时使用 `username`（兼容 `login`），再缺失则显示 `Unknown author`。提供有效用户名时，作者名称链接到 `https://github.com/{username}`；缺少关联账号时保持纯文本，不从显示名称猜测账号，也不使用推送者替代提交作者。作者最多 80 字符。
 
 收到的所有提交都会展示，超长时增加页码并重复标题：
 
@@ -68,7 +68,7 @@ by [@KiritoXDone](https://github.com/KiritoXDone)
 🔨 [{提交总数} new commits]({比较链接}) to *{repo}:{分支名}*:
 Page {当前页}/{总页数}
 
-[{短哈希}]({提交链接}): {提交摘要} by {提交作者}
+[{短哈希}]({提交链接}): {提交摘要} by [{提交作者}]({作者主页})
 ```
 
 同一次 Push 的分页依次发送，限流或失败后恢复续发。不同 Push 分开发送，不按分钟聚合。分支名去掉 `refs/heads/` 或 `refs/tags/`，最多 180 字符。GitHub 的 Push Webhook 本身最多包含 2048 个提交；这里只展示实际收到的全部条目，不额外补取。

@@ -64,12 +64,12 @@ test('release layout uses one linked title without repeating its version or addi
 test('push links its count to the comparison and includes each commit author, not the pusher', () => {
   const push = formatEvent('push', payload({ ref: 'refs/heads/feature_v2',
     compare: `${repository.html_url}/compare/abc...def`,
-    commits: [{ id: 'abcdef123456', message: 'fix: handle [brackets] & *stars*\nLong explanation', url: `${repository.html_url}/commit/abcdef123456`, author: { name: 'Timeline' } }],
+    commits: [{ id: 'abcdef123456', message: 'fix: handle [brackets] & *stars*\nLong explanation', url: `${repository.html_url}/commit/abcdef123456`, author: { name: 'Timeline', username: 'TimelineDev' } }],
   }));
   assert.equal(push.messages[0], [
     '🔨 [1 new commit](https://github.com/KiritoXDone/Github-TG-Bot/compare/abc...def) to *Github\\-TG\\-Bot:feature\\_v2*:',
     '',
-    '[abcdef1](https://github.com/KiritoXDone/Github-TG-Bot/commit/abcdef123456): fix: handle \\[brackets\\] & \\*stars\\* by Timeline',
+    '[abcdef1](https://github.com/KiritoXDone/Github-TG-Bot/commit/abcdef123456): fix: handle \\[brackets\\] & \\*stars\\* by [Timeline](https://github.com/TimelineDev)',
   ].join('\n'));
   assert.doesNotMatch(push.messages[0], /octocat|Long explanation|^https?:/m);
 });
@@ -110,6 +110,7 @@ test('paginates every commit in order, including large webhook arrays, without c
     const commits = Array.from({ length: count }, (_, index) => ({
       id: (0x1000000 + index).toString(16).padEnd(40, '0'),
       message: `change ${index}: 🧑 ${'*_[brackets]'.repeat(12)}`,
+      author: { name: '*Timeline*', username: 'TimelineDev' },
     }));
     const result = formatEvent('push', payload({ ref: 'refs/heads/main', commits }));
     assert.ok(result.messages.length > 0);
@@ -123,6 +124,7 @@ test('paginates every commit in order, including large webhook arrays, without c
     const text = result.messages.join('\n');
     const ids = [...text.matchAll(/\/commit\/([a-f\d]{40})\)/g)].map(match => match[1]);
     assert.deepEqual(ids, commits.map(commit => commit.id));
+    assert.equal(text.split('by [\\*Timeline\\*](https://github.com/TimelineDev)').length - 1, count);
     assert.doesNotMatch(text, /另有/);
   }
 });
@@ -188,6 +190,15 @@ test('push keeps ref changes explicit, escapes author fields and never attribute
   assert.ok(text.includes('by \\*Fake\\* \\[link\\]\\(https://evil\\.example\\)'));
   assert.ok(text.endsWith('Two by Unknown author'));
   assert.doesNotMatch(text, /octocat/);
+  for (const username of [undefined, 'https://evil.example', 'user/path', 'a'.repeat(40)]) {
+    const message = formatEvent('push', payload({ commits: [{ id: 'abcdef1234', message: 'Fix',
+      author: { name: 'Timeline', username } }] })).messages[0];
+    assert.ok(message.endsWith('by Timeline'));
+    assert.doesNotMatch(message, /github\.com\/(Timeline|octocat)/);
+  }
+  const fromApi = formatEvent('push', payload({ commits: [{ id: 'abcdef1234', message: 'Fix',
+    author: { login: 'TimelineDev' } }] })).messages[0];
+  assert.ok(fromApi.endsWith('by [TimelineDev](https://github.com/TimelineDev)'));
 });
 
 test('covers comments, reviews, completed workflows, stars and forks', () => {

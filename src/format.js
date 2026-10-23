@@ -155,8 +155,11 @@ function pushMessages(header, commits, repoUrl) {
     const prefix = `${href(shortId || 'commit', commitUrl)}: `;
     const message = line(typeof c.message === 'string' ? c.message.split('\n')[0] : '', 180);
     // The commit author can differ from the user who pushed the branch.
-    const author = line(c.author?.name, 80) || line(c.author?.username, 80) || 'Unknown author';
-    const suffix = ` by ${md(author)}`;
+    const login = c.author?.username || c.author?.login;
+    const author = line(c.author?.name, 80) || line(login, 80) || 'Unknown author';
+    const profile = typeof login === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login)
+      ? `https://github.com/${login}` : '';
+    const suffix = ` by ${profile ? href(author, profile) : md(author)}`;
     const entry = prefix + fit(message, budget - prefix.length - suffix.length, md) + suffix;
     if (current && current.length + entry.length + 1 > budget) {
       pages.push(current);
