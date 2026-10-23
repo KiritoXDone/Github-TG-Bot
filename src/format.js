@@ -32,6 +32,54 @@ const href = (label, target) => `[${md(label)}](${target.replace(/[)\\]/g, '\\$&
 const quote = (value) => value ? md(value).split('\n').map((s) => `>${s}`).join('\n') : '';
 const MAX_MESSAGE = 3900;
 
+const CHANGE_EMOJI = {
+  edited: '✏️', deleted: '🗑️', reopened: '🔄',
+  assigned: '👤', unassigned: '👤', labeled: '🏷️', unlabeled: '🏷️',
+  locked: '🔒', unlocked: '🔓', pinned: '📌', unpinned: '📌',
+  milestoned: '🎯', demilestoned: '🎯', transferred: '📦',
+};
+const pickEmoji = (mapping, key, fallback) => Object.hasOwn(mapping, key) ? mapping[key] : fallback;
+
+function eventEmoji(event, p) {
+  switch (event) {
+    case 'push':
+      if (p.deleted) return '🗑️';
+      if (p.forced) return '⚠️';
+      if (p.ref?.startsWith('refs/tags/')) return '🏷️';
+      return p.created ? '🌱' : '📤';
+    case 'issues':
+      if (p.action === 'closed') {
+        return pickEmoji({ completed: '✅', not_planned: '🚫' }, p.issue?.state_reason, '🔴');
+      }
+      return pickEmoji(CHANGE_EMOJI, p.action, '🎫');
+    case 'pull_request':
+      if (p.action === 'closed') return p.pull_request?.merged ? '🔀' : '🚫';
+      if (p.action === 'converted_to_draft' || (p.action === 'opened' && p.pull_request?.draft)) return '📝';
+      return pickEmoji({ ...CHANGE_EMOJI, synchronize: '🔄', ready_for_review: '🔍', review_requested: '🔍' }, p.action, '🔃');
+    case 'release':
+      if (p.action === 'deleted' || p.action === 'edited') return CHANGE_EMOJI[p.action];
+      if (p.action === 'unpublished') return '📥';
+      if (p.release?.draft) return '📝';
+      if (p.release?.prerelease || p.action === 'prereleased') return '🧪';
+      return p.action === 'created' ? '📦' : '🚀';
+    case 'issue_comment':
+    case 'commit_comment':
+    case 'pull_request_review_comment':
+      return pickEmoji(CHANGE_EMOJI, p.action, '💬');
+    case 'pull_request_review':
+      // A dismissed approval must not keep its success icon.
+      if (p.action === 'dismissed') return '🚫';
+      if (p.action === 'edited') return '✏️';
+      return pickEmoji({ approved: '✅', changes_requested: '🛠️', commented: '💬', dismissed: '🚫' }, p.review?.state, '🔍');
+    case 'workflow_run':
+      return pickEmoji({ success: '✅', failure: '❌', startup_failure: '❌', timed_out: '⏱️',
+        cancelled: '⏹️', skipped: '⏭️', neutral: '➖', action_required: '⚠️', stale: '⌛' }, p.workflow_run?.conclusion, '⚙️');
+    case 'star': return p.action === 'deleted' ? '⭐➖' : '⭐';
+    case 'fork': return '🌿';
+    default: return '🔔';
+  }
+}
+
 function fit(value, budget, render) {
   if (render(value).length <= budget) return render(value);
   let low = 0;
@@ -51,7 +99,8 @@ export function formatEvent(event, p) {
   const actor = line(p.sender?.login || 'GitHub', 80);
   const actorLabel = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)
     ? href(actor, `https://github.com/${actor}`) : md(actor);
-  const project = `*${href(p.repository.full_name.split('/')[1], repoUrl)}*`;
+  const project = `*${href(p.repository.full_name, repoUrl)}*`;
+  const emoji = eventEmoji(event, p);
   let category;
   let title;
   let subject = '';
@@ -66,8 +115,8 @@ export function formatEvent(event, p) {
       category = 'commits';
       const ref = line(p.ref, 180).replace(/^refs\/(heads|tags)\//, '') || 'branch';
       const commits = Array.isArray(p.commits) ? p.commits : [];
-      title = `${p.deleted ? '🗑 *删除分支*' : '📦 *Push*'} · ${href(ref, url(p.compare) || repoUrl)}`;
-      if (p.forced) details = '⚠️ *Force push*\n';
+      const label = p.deleted ? (p.ref?.startsWith('refs/tags/') ? '删除标签' : '删除分支') : p.forced ? 'Force push' : 'Push';
+      title = `${emoji} *${label}* · ${href(ref, url(p.compare) || repoUrl)}`;
       let shown = 0;
       for (const c of commits.slice(0, 8)) {
         const commitUrl = url(c.url) || (/^[a-f\d]{7,40}$/i.test(c.id || '') ? `${repoUrl}/commit/${c.id}` : `${repoUrl}/commits`);
@@ -86,14 +135,14 @@ export function formatEvent(event, p) {
     case 'issues':
       if (!p.issue) return null;
       category = 'issues';
-      title = linkedTitle('📝', `Issue #${line(String(p.issue.number ?? '?'), 20)}`, p.issue.html_url);
+      title = linkedTitle(emoji, `Issue #${line(String(p.issue.number ?? '?'), 20)}`, p.issue.html_url);
       subject = bold(line(p.issue.title, 250));
       body = clip(p.issue.body, 1200);
       break;
     case 'pull_request':
       if (!p.pull_request) return null;
       category = 'pr';
-      title = linkedTitle('🔀', `PR #${line(String(p.pull_request.number ?? p.number ?? '?'), 20)}`,
+      title = linkedTitle(emoji, `PR #${line(String(p.pull_request.number ?? p.number ?? '?'), 20)}`,
         p.pull_request.html_url, p.action === 'closed' && p.pull_request.merged ? 'merged' : action);
       subject = bold(line(p.pull_request.title, 250));
       if (p.pull_request.head?.ref && p.pull_request.base?.ref) {
@@ -104,7 +153,7 @@ export function formatEvent(event, p) {
     case 'release':
       if (!p.release) return null;
       category = 'release';
-      title = `🚀 *Release*${action ? ` · ${action}` : ''}${p.release.prerelease ? ' · 预发布' : ''}`;
+      title = `${emoji} *Release*${action ? ` · ${action}` : ''}${p.release.prerelease ? ' · 预发布' : ''}`;
       subject = `*${href(line(p.release.tag_name || p.release.name, 180) || 'Release', url(p.release.html_url) || `${repoUrl}/releases`)}*`;
       if (p.release.tag_name && p.release.name && p.release.name !== p.release.tag_name) subject += ` · ${bold(line(p.release.name, 250))}`;
       body = clip(p.release.body, 2400);
@@ -114,14 +163,14 @@ export function formatEvent(event, p) {
     case 'pull_request_review_comment':
       if (!p.comment) return null;
       category = 'comments';
-      title = linkedTitle('💬', `${p.issue?.pull_request || p.pull_request ? 'PR' : p.issue ? 'Issue' : 'Commit'} 评论`, p.comment.html_url);
+      title = linkedTitle(emoji, `${p.issue?.pull_request || p.pull_request ? 'PR' : p.issue ? 'Issue' : 'Commit'} 评论`, p.comment.html_url);
       subject = bold(line(p.issue?.title || p.pull_request?.title, 250));
       body = clip(p.comment.body, 2000);
       break;
     case 'pull_request_review':
       if (!p.review || !p.pull_request) return null;
       category = 'reviews';
-      title = linkedTitle('👀', `PR #${line(String(p.pull_request.number ?? '?'), 20)} Review`, p.review.html_url,
+      title = linkedTitle(emoji, `PR #${line(String(p.pull_request.number ?? '?'), 20)} Review`, p.review.html_url,
         [md(line(p.review.state, 60)), action].filter(Boolean).join(' · '));
       subject = bold(line(p.pull_request.title, 250));
       body = clip(p.review.body, 2000);
@@ -129,13 +178,13 @@ export function formatEvent(event, p) {
     case 'workflow_run':
       if (p.action !== 'completed' || !p.workflow_run) return null;
       category = 'actions';
-      title = linkedTitle('⚙️', 'Actions', p.workflow_run.html_url, md(line(p.workflow_run.conclusion, 60)));
+      title = linkedTitle(emoji, 'Actions', p.workflow_run.html_url, md(line(p.workflow_run.conclusion, 60)));
       subject = [bold(line(p.workflow_run.name, 200)), md(line(p.workflow_run.head_branch, 150))].filter(Boolean).join(' · ');
       break;
     case 'star':
-      category = 'stars'; title = linkedTitle('⭐', 'Star', `${repoUrl}/stargazers`); break;
+      category = 'stars'; title = linkedTitle(emoji, 'Star', `${repoUrl}/stargazers`); break;
     case 'fork':
-      category = 'forks'; title = linkedTitle('🍴', 'Fork', p.forkee?.html_url, ''); break;
+      category = 'forks'; title = linkedTitle(emoji, 'Fork', p.forkee?.html_url, ''); break;
     default: return null;
   }
   let text = `${project}\n${title} · ${actorLabel}`;

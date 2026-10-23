@@ -16,7 +16,7 @@
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
-- 通知使用 MarkdownV2：第一行是加粗、可点击的项目名，第二行显示事件类型与操作人；引用正文，版本号、Issue/PR 编号和提交哈希可点击，不单独附加裸链接；正文特殊字符安全转义。
+- 通知使用 MarkdownV2：第一行是加粗、可点击的 `owner/repo`，第二行显示事件类型与操作人；引用正文，版本号、Issue/PR 编号和提交哈希可点击，不单独附加裸链接；正文特殊字符安全转义。
 - `/status` 检查投递状态，`/retry` 重试失败消息。
 - 零运行时 npm 依赖；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
 
@@ -178,15 +178,15 @@ npm run telegram:setup
 
 | 类型 | GitHub Webhook 事件 | 行为 |
 | --- | --- | --- |
-| `issues` | `issues` | Issue 新建、关闭、重新打开、指派、标签等 |
-| `pr` | `pull_request` | PR 创建、同步提交、关闭、合并等 |
-| `commits` | `push` | Push 批次内提交摘要，标记 force push 和分支/标签删除 |
-| `release` | `release` | Release 动态，标记 pre-release |
-| `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | Issue、PR、Commit 评论 |
-| `reviews` | `pull_request_review` | PR Review |
-| `actions` | `workflow_run` | 仅 workflow completed，包含结论 |
-| `stars` | `star` | Star 创建/删除 |
-| `forks` | `fork` | Fork |
+| `issues` | `issues` | 🎫 Issue；✅ 完成、🚫 不计划处理、🔴 其他关闭、🔄 重开 |
+| `pr` | `pull_request` | 🔃 创建、📝 草稿、🔄 同步、🔀 合并、🚫 未合并关闭 |
+| `commits` | `push` | 📤 提交摘要、🌱 新分支、🏷️ 标签、⚠️ 强推、🗑️ 删除分支/标签 |
+| `release` | `release` | 🚀 发布、🧪 预发布、📝 草稿、📦 创建、📥 撤回发布 |
+| `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | 💬 评论、✏️ 编辑、🗑️ 删除 |
+| `reviews` | `pull_request_review` | 🔍 审查、✅ 批准、🛠️ 请求修改、💬 意见、🚫 撤销审查 |
+| `actions` | `workflow_run` | 仅 completed：✅ 成功、❌ 失败、⏱️ 超时、⏹️ 取消、⏭️ 跳过、⚠️ 需处理 |
+| `stars` | `star` | ⭐ Star、⭐➖ 取消 Star |
+| `forks` | `fork` | 🌿 Fork |
 
 `commits` 是一次 Push 的摘要，不会逐个 Commit 单独刷屏。事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
 
