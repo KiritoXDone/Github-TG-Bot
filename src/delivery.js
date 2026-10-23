@@ -30,6 +30,7 @@ async function deliver(env, id, now) {
     const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: row.chat_id, text: row.text,
+        ...(row.parse_mode ? { parse_mode: row.parse_mode } : {}),
         ...(row.thread_id ? { message_thread_id: row.thread_id } : {}),
         link_preview_options: { is_disabled: true } }),
       signal: AbortSignal.timeout(8000),

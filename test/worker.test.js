@@ -48,7 +48,7 @@ before(async () => {
     },
   }));
   db = await mf.getD1Database('DB');
-  for (const file of ['0001_init.sql', '0002_destinations.sql']) {
+  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql']) {
     const sql = await readFile(`migrations/${file}`, 'utf8');
     for (const statement of sql.split(';').filter((s) => s.trim())) await db.prepare(statement).run();
   }
@@ -108,6 +108,17 @@ test('health checks the actual D1 schema and unknown routes/methods are rejected
   assert.equal((await mf.dispatchFetch('https://worker.test/webhooks/github')).status, 405);
 });
 
+test('messages queued without a format remain plain text after the migration', async () => {
+  const text = 'Legacy *text* with [brackets] and https://github.com/a/b';
+  await db.prepare(`INSERT INTO outbox (id, repo, chat_id, text, next_attempt_at, created_at)
+    VALUES ('legacy-format', ?, '123', ?, 0, 0)`).bind(repo, text).run();
+  await mf.dispatchFetch('https://worker.test/__flush');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, text);
+  assert.equal(sent[0].parse_mode, undefined);
+  assert.equal((await db.prepare("SELECT status FROM outbox WHERE id = 'legacy-format'").first()).status, 'sent');
+});
+
 test('rejects forged GitHub and Telegram webhooks before writing anything', async () => {
   assert.equal((await telegram('/sub a/b', { secret: 'bad' })).status, 401);
   assert.equal((await github('issues', {}, randomUUID(), 'bad')).status, 401);
@@ -131,11 +142,13 @@ test('subscribes, delivers an issue, and deduplicates concurrent GitHub redelive
   const results = await Promise.all(Array.from({ length: 6 }, () => github('issues', {}, delivery)));
   assert.ok(results.every((r) => r.status === 200));
   await settled();
-  const notifications = sent.filter((m) => m.text.includes('Issue #1'));
+  const notifications = sent.filter((m) => m.text.includes('/issues/1)'));
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].chat_id, '123');
-  assert.equal(notifications[0].parse_mode, undefined);
-  assert.match(notifications[0].text, /<b>Bug<\/b>/);
+  assert.equal(notifications[0].parse_mode, 'MarkdownV2');
+  assert.equal(sent[0].parse_mode, undefined, 'command replies remain plain text');
+  assert.ok(notifications[0].text.includes('*<b\\>Bug</b\\>*'));
+  assert.ok(notifications[0].text.includes('>Details'));
 });
 
 test('routes by repository, category and group topic, preserving independent subscriptions', async () => {
@@ -143,7 +156,7 @@ test('routes by repository, category and group topic, preserving independent sub
   await command(`/sub ${repo} issues`, { chat: -10099, thread: 8 });
   await command('/sub other/repo issues');
   await github(); await settled();
-  const issue = sent.filter((m) => m.text.includes('Issue #1'));
+  const issue = sent.filter((m) => m.text.includes('/issues/1)'));
   assert.equal(issue.length, 1);
   assert.equal(issue[0].message_thread_id, 8);
   await github('release', { action: 'published', release: { tag_name: 'v1' } }); await settled();
@@ -169,7 +182,7 @@ test('changes events, lists subscriptions, rejects invalid options and reports d
   await command('/list'); assert.match(sent.at(-1).text, /release,actions/);
   await command('/status'); assert.match(sent.at(-1).text, /聊天 ID：123/);
   await github(); await settled();
-  assert.equal(sent.filter((m) => m.text.includes('Issue #1')).length, 0);
+  assert.equal(sent.filter((m) => m.text.includes('/issues/1)')).length, 0);
 });
 
 test('honors Telegram retry_after and recovers via the scheduled handler', async () => {
@@ -178,11 +191,14 @@ test('honors Telegram retry_after and recovers via the scheduled handler', async
   await github(); await settled();
   const row = await db.prepare("SELECT * FROM outbox WHERE status = 'pending'").first();
   assert.equal(row.attempts, 1);
+  assert.equal(row.parse_mode, 'MarkdownV2');
   assert.ok(row.next_attempt_at >= row.created_at + 120);
   // The scheduled handler uses current time; move the retry cursor into the past.
   await db.prepare('UPDATE outbox SET next_attempt_at = 0 WHERE id = ?').bind(row.id).run();
   assert.equal((await mf.dispatchFetch(`https://worker.test/__scheduled?time=${Date.now()}`)).status, 200);
   assert.equal((await db.prepare('SELECT status FROM outbox WHERE id = ?').bind(row.id).first()).status, 'sent');
+  assert.equal(sent.at(-1).parse_mode, 'MarkdownV2');
+  assert.equal(sent.at(-1).text, row.text);
 });
 
 test('records permanent failures and /retry sends them after the problem is fixed', async () => {
@@ -190,7 +206,8 @@ test('records permanent failures and /retry sends them after the problem is fixe
   responses.push({ ok: false, error_code: 403 });
   await github(); await settled();
   let row = await db.prepare("SELECT * FROM outbox WHERE status = 'failed'").first();
-  assert.match(row.text, /Issue #1/);
+  assert.ok(row.text.includes('/issues/1)'));
+  assert.equal(row.parse_mode, 'MarkdownV2');
   await command('/retry');
   row = await db.prepare('SELECT * FROM outbox WHERE id = ?').bind(row.id).first();
   assert.equal(row.status, 'sent');
@@ -212,7 +229,7 @@ test('replayed events never send to newly added subscriptions', async () => {
   await github('issues', {}, id);
   await command(`/sub ${repo}`);
   await github('issues', {}, id); await settled();
-  assert.equal(sent.filter((m) => m.text.includes('Issue #1')).length, 0);
+  assert.equal(sent.filter((m) => m.text.includes('/issues/1)')).length, 0);
 });
 
 test('rejects invalid content types, oversized payloads and malformed JSON', async () => {
@@ -244,7 +261,7 @@ test('an in-flight failure cannot revive a message cancelled by unsubscribe', as
   responses.push(async () => { await blocked; return { ok: false, error_code: 403 }; });
   const delivery = randomUUID();
   await github('issues', {}, delivery);
-  await eventually(() => sent.some((m) => m.text.includes('Issue #1')));
+  await eventually(() => sent.some((m) => m.text.includes('/issues/1)')));
   await command(`/unsub ${repo}`);
   release();
   // Wait for the old sender to observe its cancellation before attempting /retry.
@@ -252,7 +269,7 @@ test('an in-flight failure cannot revive a message cancelled by unsubscribe', as
   await command('/retry');
   const row = await db.prepare('SELECT status FROM outbox WHERE id = ?').bind(`gh:${delivery}:123:0`).first();
   assert.equal(row.status, 'cancelled');
-  assert.equal(sent.filter((m) => m.text.includes('Issue #1')).length, 1);
+  assert.equal(sent.filter((m) => m.text.includes('/issues/1)')).length, 1);
 });
 
 test('expired delivery leases recover after interruption and repeated failures stop at 12 attempts', async () => {
@@ -286,7 +303,7 @@ test('one repository can independently notify personal, group topic and channel 
   const rows = await db.prepare('SELECT chat_id, type FROM destinations ORDER BY chat_id').all();
   assert.deepEqual(rows.results.map((r) => r.type).sort(), ['channel', 'private', 'supergroup']);
   await github(); await settled();
-  const notifications = sent.filter((m) => m.text.includes('Issue #1'));
+  const notifications = sent.filter((m) => m.text.includes('/issues/1)'));
   assert.deepEqual(notifications.map((m) => m.chat_id).sort(), ['-10066', '-10077', '123']);
   assert.equal(notifications.find((m) => m.chat_id === '-10066').message_thread_id, 7);
   assert.equal(notifications.find((m) => m.chat_id === '-10077').message_thread_id, undefined);
@@ -297,7 +314,7 @@ test('private channels connect by numeric ID and public channel usernames resolv
   await command(`/sub ${repo} release --to -10088`);
   chats['-10077'].username = 'new_channel_name';
   await github(); await settled();
-  assert.equal(sent.find((m) => m.text.includes('Issue #1')).chat_id, '-10077');
+  assert.equal(sent.find((m) => m.text.includes('/issues/1)')).chat_id, '-10077');
   await command('/targets');
   assert.match(sent.at(-1).text, /个人/);
   assert.match(sent.at(-1).text, /频道 · Private channel \(-10088\)/);
@@ -320,7 +337,7 @@ test('group subscriptions work without editing ALLOWED_CHAT_IDS after admin veri
   assert.equal(sent.at(-1).chat_id, '-10066');
   assert.equal(sent.at(-1).message_thread_id, 9);
   await github(); await settled();
-  assert.equal(sent.find((m) => m.text.includes('Issue #1')).chat_id, '-10066');
+  assert.equal(sent.find((m) => m.text.includes('/issues/1)')).chat_id, '-10066');
 });
 
 test('an inaccessible group gets a private error and cannot become a notification target', async () => {
@@ -355,7 +372,7 @@ test('removing a destination cancels all its topics and retries without affectin
   assert.equal((await db.prepare("SELECT status FROM outbox WHERE id = 'group-pending'").first()).status, 'cancelled');
   assert.equal((await db.prepare("SELECT count(*) AS n FROM subscriptions WHERE chat_id = '-10066'").first()).n, 0);
   await github(); await settled();
-  assert.deepEqual(sent.filter((m) => m.text.includes('Issue #1')).map((m) => m.chat_id), ['-10077']);
+  assert.deepEqual(sent.filter((m) => m.text.includes('/issues/1)')).map((m) => m.chat_id), ['-10077']);
 });
 
 test('a disabled destination overrides legacy allowlists and can be explicitly reconnected', async () => {
@@ -368,7 +385,7 @@ test('a disabled destination overrides legacy allowlists and can be explicitly r
   assert.equal((await db.prepare("SELECT status FROM outbox WHERE id = 'disabled-target'").first()).status, 'cancelled');
   await command(`/sub ${repo} --to -10099`);
   await github(); await settled();
-  assert.equal(sent.filter((m) => m.text.includes('Issue #1')).length, 1);
+  assert.equal(sent.filter((m) => m.text.includes('/issues/1)')).length, 1);
 });
 
 test('private controls remain usable after personal notification target is disabled', async () => {
@@ -412,5 +429,5 @@ test('temporary Telegram validation failures return 503 without claiming the upd
 test('legacy subscriptions keep routing without destination records after the additive migration', async () => {
   await db.prepare('INSERT INTO subscriptions (repo, chat_id, thread_id, events) VALUES (?, ?, 0, ?)').bind(repo, '123', '["issues"]').run();
   await github(); await settled();
-  assert.equal(sent.filter((m) => m.text.includes('Issue #1')).length, 1);
+  assert.equal(sent.filter((m) => m.text.includes('/issues/1)')).length, 1);
 });

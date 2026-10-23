@@ -40,13 +40,13 @@ export default {
           const statements = receiptStatements(env.DB, id, token, now);
           // Fan-out and receipt are one transaction. A replay cannot add new recipients.
           statements.push(env.DB.prepare(`INSERT OR IGNORE INTO outbox
-            (id, repo, chat_id, thread_id, text, next_attempt_at, created_at)
-            SELECT ? || ':' || s.chat_id || ':' || s.thread_id, s.repo, s.chat_id, s.thread_id, ?, ?, ?
+            (id, repo, chat_id, thread_id, text, parse_mode, next_attempt_at, created_at)
+            SELECT ? || ':' || s.chat_id || ':' || s.thread_id, s.repo, s.chat_id, s.thread_id, ?, ?, ?, ?
             FROM subscriptions s LEFT JOIN destinations d ON d.chat_id = s.chat_id WHERE s.repo = ?
               AND (d.enabled = 1 OR (d.chat_id IS NULL AND s.chat_id IN (SELECT value FROM json_each(?))))
               AND EXISTS (SELECT 1 FROM json_each(s.events) WHERE value = ?)
               AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)`)
-            .bind(id, notification.text, now, now, notification.repo, JSON.stringify(chats), notification.category, id, token));
+            .bind(id, notification.text, notification.parse_mode, now, now, notification.repo, JSON.stringify(chats), notification.category, id, token));
           await env.DB.batch(statements);
         }
       }
