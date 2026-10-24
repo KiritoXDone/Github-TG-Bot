@@ -1,4 +1,4 @@
-import { escapeMarkdown as md, renderMarkdown } from './markdown.js';
+import { escapeMarkdown as md, quoteMarkdown, renderMarkdown, shouldCollapse } from './markdown.js';
 
 export const EVENTS = ['issues', 'pr', 'commits', 'release', 'comments', 'reviews', 'actions', 'stars', 'forks'];
 export const DEFAULT_EVENTS = ['issues', 'pr', 'commits', 'release'];
@@ -138,12 +138,7 @@ function fit(value, budget, render) {
 function pushMessages(header, commits, repoUrl) {
   if (!commits.length) return [header];
   const pageLabel = (page, total) => `Page ${page}/${total}`;
-  // A page holds at least one commit. Reserve the largest possible page label
-  // before splitting so adding page numbers cannot overflow the final message.
-  const budget = MAX_MESSAGE - header.length - pageLabel(commits.length, commits.length).length - 3;
-  const pages = [];
-  let current = '';
-  for (const commit of commits) {
+  const entries = commits.map(commit => {
     const c = commit || {};
     const commitUrl = url(c.url) || (/^[a-f\d]{7,40}$/i.test(c.id || '') ? `${repoUrl}/commit/${c.id}` : `${repoUrl}/commits`);
     const shortId = line(c.id, 80).slice(0, 7).replace(/[\uD800-\uDBFF]$/, '');
@@ -155,15 +150,27 @@ function pushMessages(header, commits, repoUrl) {
     const profile = typeof login === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login)
       ? `https://github.com/${login}` : '';
     const suffix = ` by ${profile ? href(author, profile) : md(author)}`;
-    const entry = prefix + fit(message, budget - prefix.length - suffix.length, md) + suffix;
-    if (current && current.length + entry.length + 1 > budget) {
+    return { prefix, message, suffix, plain: `${shortId || 'commit'}: ${message} by ${author}` };
+  });
+  const folded = commits.length > 5 || shouldCollapse(entries.map(entry => entry.plain).join('\n'));
+  // Reserve page labels plus quote markers and a '>' for every complete line.
+  const budget = MAX_MESSAGE - header.length - pageLabel(commits.length, commits.length).length - 3 - (folded ? 4 : 0);
+  const pages = [];
+  let current = '';
+  let used = 0;
+  for (const { prefix, message, suffix } of entries) {
+    const entry = prefix + fit(message, budget - prefix.length - suffix.length - (folded ? 1 : 0), md) + suffix;
+    const cost = entry.length + (folded ? 1 : 0);
+    if (current && used + cost + 1 > budget) {
       pages.push(current);
       current = '';
+      used = 0;
     }
+    used += cost + (current ? 1 : 0);
     current += `${current ? '\n' : ''}${entry}`;
   }
   if (current) pages.push(current);
-  return pages.map((body, index) => `${header}${pages.length > 1 ? `\n${pageLabel(index + 1, pages.length)}` : ''}\n\n${body}`);
+  return pages.map((body, index) => `${header}${pages.length > 1 ? `\n${pageLabel(index + 1, pages.length)}` : ''}\n\n${folded ? quoteMarkdown(body) : body}`);
 }
 
 export function formatEvent(event, p) {
@@ -272,7 +279,7 @@ export function formatEvent(event, p) {
   }
   let text = `${title}\n${by} ${actorLabel}`;
   if (details) text += `\n\n${details}`;
-  const renderedBody = renderMarkdown(body, { budget: MAX_MESSAGE - text.length - 2, maxText: bodyLimit, base: `${repoUrl}/` });
+  const renderedBody = renderMarkdown(body, { budget: MAX_MESSAGE - text.length - 2, maxText: bodyLimit, base: `${repoUrl}/`, compact: true });
   if (renderedBody) text += `\n\n${renderedBody}`;
   return { repo, category, messages: [text], parse_mode: 'MarkdownV2' };
 }

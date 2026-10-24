@@ -94,3 +94,40 @@ test('keeps expandable details valid when closing tags are missing or long conte
     assert.doesNotMatch(result, /<\/?details|<\/?summary|\|\|…/);
   }
 });
+
+test('compact previews fold only above the visible character or nonempty line threshold', () => {
+  for (const count of [600, 601]) {
+    const result = render('x'.repeat(count), { compact: true });
+    assert.equal(result.startsWith('**>'), count > 600);
+  }
+  for (const count of [8, 9]) {
+    const source = Array.from({ length: count }, (_, i) => `Line ${i}`).join('\n');
+    assert.equal(render(source, { compact: true }).startsWith('**>'), count > 8);
+  }
+  const link = `[short](https://example.com/${'a'.repeat(800)})`;
+  assert.equal(render(link, { compact: true }), render(link), 'URL markup is not visible text length');
+});
+
+test('compact previews retain links and code, flatten quotes, and keep short introductions outside details', () => {
+  const source = 'Intro\n\n> **Quoted** [link](https://example.com/)\n\n' + 'x'.repeat(601) + '\n\n```js\nconst x = `value`;\nreturn x;\n```';
+  const result = render(source, { compact: true });
+  assert.ok(result.startsWith('**>Intro'));
+  assert.ok(result.includes('>*Quoted* [link](https://example.com/)'));
+  assert.ok(result.includes('>```js\nconst x = \\`value\\`;\nreturn x;\n```||'));
+  assert.doesNotMatch(result, />>|\n>const|\n>return|\n>```\|\|/);
+  const url = render('[link](https://example.com/?q=`value)\n\n' + 'x'.repeat(601) + '\n\nlast line', { compact: true });
+  assert.ok(url.endsWith('\n>\n>last line||'), 'backticks in link targets must not open code');
+  const details = '中文说明\n\n<details><summary>English</summary>\n\n' + 'x'.repeat(800) + '\n\n</details>';
+  assert.equal(render(details, { compact: true }), render(details));
+  assert.ok(render('<details open><summary>English</summary>' + 'x'.repeat(800) + '</details>', { compact: true }).startsWith('>*English*'));
+});
+
+test('compact truncation includes all quote markers in its budget and keeps Unicode intact', () => {
+  const source = '**' + '🧑'.repeat(2000) + '**\n\n[details](https://example.com/)';
+  for (const budget of [1, 15, 50, 3900]) {
+    const result = render(source, { compact: true, budget });
+    assert.ok(result.length <= budget);
+    assert.ok(result.isWellFormed());
+    assert.ok(result === '…' || result.endsWith('…||'));
+  }
+});

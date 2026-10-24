@@ -38,7 +38,7 @@ test('limits large push and release messages without cutting inline links or Mar
   const release = formatEvent('release', payload({ action: 'published', release: { name: '<b>1.0</b>', body: '🧑'.repeat(5000), html_url: `${repository.html_url}/releases/tag/v1` } }));
   assert.ok(release.messages[0].length < 4096);
   assert.ok(release.messages[0].includes('[Github\\-TG\\-Bot <b\\>1\\.0</b\\>](https://github.com/KiritoXDone/Github-TG-Bot/releases/tag/v1)'));
-  assert.ok(release.messages[0].endsWith('…'));
+  assert.ok(release.messages[0].endsWith('…||'));
   assert.equal(release.parse_mode, 'MarkdownV2');
   assert.ok(release.messages[0].isWellFormed());
 });
@@ -120,12 +120,50 @@ test('paginates every commit in order, including large webhook arrays, without c
       assert.ok(message.isWellFormed());
       assert.ok(message.startsWith(`🔨 [${count} new commit${count === 1 ? '' : 's'}](`));
       if (result.messages.length > 1) assert.ok(message.includes(`Page ${index + 1}/${result.messages.length}`));
+      if (count >= 50) {
+        assert.ok(message.includes('\n\n**>['));
+        assert.ok(message.endsWith('||'));
+      }
     }
     const text = result.messages.join('\n');
     const ids = [...text.matchAll(/\/commit\/([a-f\d]{40})\)/g)].map(match => match[1]);
     assert.deepEqual(ids, commits.map(commit => commit.id));
     assert.equal(text.split('by [\\*Timeline\\*](https://github.com/TimelineDev)').length - 1, count);
     assert.doesNotMatch(text, /另有/);
+  }
+});
+
+test('collapses pushes above five commits or a long visible summary without losing author links', () => {
+  for (const count of [1, 5, 6]) {
+    const event = formatEvent('push', payload({ ref: 'refs/heads/main', commits: Array.from({ length: count }, (_, i) => ({
+      id: `abcdef${i}1234`, message: 'Fix startup', author: { name: 'Timeline', username: 'TimelineDev' },
+    })) }));
+    assert.equal(event.messages.length, 1);
+    assert.equal(event.messages[0].includes('\n\n**>'), count > 5);
+    assert.equal(event.messages[0].split('by [Timeline](https://github.com/TimelineDev)').length - 1, count);
+  }
+  const text = formatEvent('push', payload({ commits: Array.from({ length: 4 }, () => ({ id: 'abcdef1234', message: 'x'.repeat(180) })) })).messages[0];
+  assert.ok(text.includes('\n\n**>'));
+  assert.ok(text.endsWith('||'));
+});
+
+test('long issue, PR, release, comment and review bodies collapse while subjects remain clickable', () => {
+  const body = '**Changes**\n\n' + Array.from({ length: 10 }, (_, i) => `- Fix ${i} with [details](https://example.com/fix/${i})`).join('\n');
+  const target = `${repository.html_url}/issues/1`;
+  const cases = [
+    ['issues', { issue: { number: 1, html_url: target, body } }],
+    ['pull_request', { pull_request: { number: 1, html_url: target, body } }],
+    ['release', { release: { tag_name: 'v2', html_url: target, body } }],
+    ['issue_comment', { comment: { html_url: target, body } }],
+    ['pull_request_review', { pull_request: {}, review: { html_url: target, body } }],
+  ];
+  for (const [type, data] of cases) {
+    const message = formatEvent(type, payload(data)).messages[0];
+    assert.ok(message.split('\n')[0].includes(`](${target})`));
+    assert.ok(message.includes('\n\n**>*Changes*'), type);
+    assert.ok(message.includes('[details](https://example.com/fix/9)'), type);
+    assert.ok(message.endsWith('||'), type);
+    assert.ok(message.length <= 3900);
   }
 });
 

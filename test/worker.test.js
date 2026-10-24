@@ -334,6 +334,7 @@ test('large pushes fan out every page, retain topic routing, and deduplicate all
   for (const chat of ['123', '-10099']) {
     const messages = sent.filter(message => message.parse_mode === 'MarkdownV2' && message.chat_id === chat);
     assert.deepEqual(messages.map(message => message.text), expected);
+    assert.ok(messages.every(message => message.text.includes('\n\n**>[') && message.text.endsWith('||')));
     if (chat === '-10099') assert.ok(messages.every(message => message.message_thread_id === 7));
   }
   assert.equal(sent.filter(message => message.chat_id === '-10077').length, 0);
