@@ -25,7 +25,7 @@ const bindings = {
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({
     modules: [
-      ...['test/worker.js', ...['index', 'bot', 'delivery', 'format', 'markdown', 'security', 'storage', 'targets'].map((name) => `src/${name}.js`)]
+      ...['test/worker.js', ...['index', 'bot', 'delivery', 'format', 'markdown', 'releases', 'security', 'storage', 'targets'].map((name) => `src/${name}.js`)]
         .map((path) => ({ type: 'ESModule', path })),
       // Unbundled workerd resolves the bare import relative to src/markdown.js.
       { type: 'ESModule', path: 'src/marked', contents: await readFile(fileURLToPath(import.meta.resolve('marked')), 'utf8') },
@@ -54,14 +54,14 @@ before(async () => {
     },
   }));
   db = await mf.getD1Database('DB');
-  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql']) {
+  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql', '0005_release_states.sql']) {
     const sql = await readFile(`migrations/${file}`, 'utf8');
     for (const statement of sql.split(';').filter((s) => s.trim())) await db.prepare(statement).run();
   }
 });
 after(async () => { await mf?.dispose(); });
 beforeEach(async () => {
-  await db.batch(['subscriptions', 'receipts', 'outbox', 'destinations'].map((table) => db.prepare(`DELETE FROM ${table}`)));
+  await db.batch(['subscriptions', 'receipts', 'outbox', 'destinations', 'release_states'].map((table) => db.prepare(`DELETE FROM ${table}`)));
   sent = []; responses = [];
   chats = {
     '-10099': { id: -10099, type: 'supergroup', title: 'Team group', is_forum: true },
@@ -239,6 +239,86 @@ test('publication deduplication still respects receipts stored before the upgrad
   await github('release', { action: 'published', release });
   await settled();
   assert.equal(sent.length, 0, 'the replay also seeds publication deduplication for different IDs');
+});
+
+test('release metadata saves are silent and concurrent identical edits notify each destination once', async () => {
+  await command(`/sub ${repo} release --to @release_news`);
+  await command(`/sub ${repo} release`);
+  sent = [];
+  const release = { id: 422499154, draft: false, prerelease: false, name: 'Version 2', tag_name: 'v2', body: '**Notes A**',
+    published_at: '2026-10-24T03:50:00Z', updated_at: '2026-10-24T03:50:00Z' };
+  await github('release', { action: 'published', release }); await settled();
+  assert.equal(sent.length, 2);
+  for (const extra of [
+    { updated_at: '2026-10-24T03:50:01Z' }, { assets: [{ name: 'app.apk', download_count: 100 }] },
+    { target_commitish: 'another-commit' }, { body: '\r\n**Notes A**\r\n' },
+  ]) {
+    await github('release', { action: 'edited', sender: { login: 'another-editor' },
+      release: { ...release, ...extra, updated_at: '2026-10-24T03:50:01Z' } });
+  }
+  await settled();
+  assert.equal(sent.length, 2, 'unchanged displayed release content is silent');
+  const responses = await Promise.all(Array.from({ length: 8 }, () => github('release', {
+    action: 'edited', release: { ...release, body: '**Notes B**', updated_at: '2026-10-24T03:50:02Z' },
+  })));
+  assert.ok(responses.every(response => response.status === 200));
+  await settled();
+  assert.equal(sent.length, 4);
+  for (const chat of ['123', '-10077']) {
+    const updates = sent.filter(message => message.chat_id === chat && message.text.startsWith('✏️ *Updated release*'));
+    assert.equal(updates.length, 1);
+    assert.ok(updates[0].text.endsWith('*Notes B*'));
+  }
+});
+
+test('release title, tag, prerelease and body changes notify, including restoring previous content', async () => {
+  await command(`/sub ${repo} release --to @release_news`); sent = [];
+  const original = { id: 422499154, name: 'Version 2', tag_name: 'v2', body: 'Notes A', prerelease: false };
+  let release = { ...original };
+  await github('release', { action: 'edited', release }); await settled();
+  let expected = 1;
+  for (const change of [{ name: 'Version 2 renamed' }, { tag_name: 'v2.0' }, { prerelease: true }, { body: 'Notes B' }, original]) {
+    release = { ...release, ...change };
+    await github('release', { action: 'edited', release }); await settled();
+    assert.equal(sent.length, ++expected);
+    await github('release', { action: 'edited', release }); await settled();
+    assert.equal(sent.length, expected, 'same content stays silent');
+  }
+});
+
+test('stale edits and replays cannot reset the release content baseline', async () => {
+  await command(`/sub ${repo} release --to @release_news`); sent = [];
+  const release = { id: 422499154, tag_name: 'v2', body: 'A', updated_at: '2026-10-24T03:50:00Z' };
+  const firstDelivery = randomUUID();
+  await github('release', { action: 'edited', release }, firstDelivery); await settled();
+  await github('release', { action: 'edited', release: { ...release, body: 'B', updated_at: '2026-10-24T03:50:02Z' } }); await settled();
+  assert.equal(sent.length, 2);
+  const latest = await db.prepare('SELECT content_hash, claim_token FROM release_states').first();
+  await github('release', { action: 'edited', release });
+  await github('release', { action: 'edited', release }, firstDelivery);
+  await github('release', { action: 'edited', release: { ...release, body: 'B', updated_at: '2026-10-24T03:50:03Z' } });
+  // The same content advances the source timestamp, so a delayed different body is ignored.
+  await github('release', { action: 'edited', release: { ...release, body: 'C', updated_at: '2026-10-24T03:50:02Z' } });
+  await settled();
+  assert.equal(sent.length, 2);
+  assert.deepEqual(await db.prepare('SELECT content_hash, claim_token FROM release_states').first(), latest);
+});
+
+test('a failed edit queue transaction rolls back the baseline and permits a safe retry', async () => {
+  await command(`/sub ${repo} release --to @release_news`); sent = [];
+  const release = { id: 422499154, tag_name: 'v2', body: 'A' };
+  await github('release', { action: 'edited', release }); await settled();
+  const before = await db.prepare('SELECT content_hash, claim_token FROM release_states').first();
+  const delivery = randomUUID();
+  await db.exec("CREATE TRIGGER fail_release_edit BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+  try {
+    assert.equal((await github('release', { action: 'edited', release: { ...release, body: 'B' } }, delivery)).status, 503);
+    assert.deepEqual(await db.prepare('SELECT content_hash, claim_token FROM release_states').first(), before);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM receipts WHERE id = ?').bind(`gh:${delivery}`).first()).n, 0);
+  } finally { await db.exec('DROP TRIGGER fail_release_edit'); }
+  await github('release', { action: 'edited', release: { ...release, body: 'B' } }, delivery); await settled();
+  assert.equal(sent.length, 2);
+  assert.ok(sent[1].text.endsWith('\n\nB'));
 });
 
 test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {

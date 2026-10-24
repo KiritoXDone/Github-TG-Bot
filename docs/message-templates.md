@@ -166,14 +166,16 @@ Name 最多 250 字符，tag 最多 180 字符；发布说明最多 2400 字符�
 | --- | --- |
 | `published` | `New release` |
 | `created` / `released` / `prereleased` | 不推送，避免同一次发布重复通知 |
-| `edited` | `Updated release` |
+| `edited` | 展示内容发生变化时才发送 `Updated release` |
 | `deleted` | `Deleted release` |
 | `unpublished` | `Unpublished release` |
 | 其他或缺失 | `Updated release` |
 
 `release.draft=true` 时直接跳过，不进入发送队列。非草稿且 `release.prerelease=true` 的发布把 `release` 替换为 `pre-release`，例如 `New pre-release`。
 
-新版本只接受 `published`，它同时覆盖正式发布和预发布，包括从草稿发布；参见 [GitHub 发布事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release)。除投递 ID 去重外，还按仓库、Release ID、`published_at` 原子去重（保留 30 天），避免多个不同 ID 的发布请求重复入队。编辑不受发布去重影响；不同 Release 或不同发布时间独立通知。缺少有效 Release ID / 发布时间的请求保留原投递 ID 去重。
+新版本只接受 `published`，它同时覆盖正式发布和预发布，包括从草稿发布；参见 [GitHub 发布事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release)。除投递 ID 去重外，还按仓库、Release ID、`published_at` 原子去重（保留 30 天），避免多个不同 ID 的发布请求重复入队。不同 Release 或不同发布时间独立通知。缺少有效 Release ID / 发布时间的请求保留原投递 ID 去重。
+
+编辑按同一个 Release 的最新内容进行比对：名称、版本号、完整发布说明、预发布状态相同时不再推送，更新时间、操作人、附件下载量等元数据不会触发重复通知。发布时建立基准；没有基准的首次编辑会通知一次。真正变化（包括恢复为旧内容）仍通知，旧于已记录 `updated_at` 的事件不覆盖新内容。内容指纹、事件回执和消息队列在同一事务中保存，仅存 SHA-256 摘要；超过 30 天未见活动的基准会清理。
 
 Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 预发布 🧪 → 其他 🚀。
 

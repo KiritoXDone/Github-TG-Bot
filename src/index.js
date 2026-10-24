@@ -1,6 +1,7 @@
 import { handleTelegram } from './bot.js';
 import { flushOutbox } from './delivery.js';
 import { formatEvent } from './format.js';
+import { releaseSnapshot, rememberRelease } from './releases.js';
 import { configured, equalSecret, HttpError, ids, parseBody, readBody, validGitHubSignature } from './security.js';
 import { prune, receiptStatements } from './storage.js';
 
@@ -22,6 +23,7 @@ export default {
       if (!configured(env)) return json({ error: 'Worker configuration incomplete' }, 503);
       if (path === '/health') {
         await env.DB.prepare('SELECT 1 FROM subscriptions LEFT JOIN destinations USING (chat_id) LIMIT 1').first();
+        await env.DB.prepare('SELECT 1 FROM release_states LIMIT 1').first();
         return json({ ok: true });
       }
       if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new HttpError(415, 'Use application/json');
@@ -53,6 +55,10 @@ export default {
           const publication = event === 'release' && payload.action === 'published'
             ? publicationReceipt(notification.repo, payload.release) : null;
           if (publication) statements.push(...receiptStatements(env.DB, publication, token, now));
+          const snapshot = event === 'release' && ['published', 'edited'].includes(payload.action)
+            ? await releaseSnapshot(payload.release) : null;
+          if (snapshot) statements.push(rememberRelease(env.DB, notification.repo, snapshot, id, publication, token, now));
+          const edit = payload.action === 'edited' ? snapshot?.id ?? null : null;
           // All pages and recipients share one transaction and receipt. json_each
           // keeps large pushes within D1's query/parameter limits without dropping pages.
           statements.push(env.DB.prepare(`INSERT OR IGNORE INTO outbox
@@ -64,10 +70,12 @@ export default {
               AND (d.enabled = 1 OR (d.chat_id IS NULL AND s.chat_id IN (SELECT value FROM json_each(?))))
               AND EXISTS (SELECT 1 FROM json_each(s.events) WHERE value = ?)
               AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)
-              AND (? IS NULL OR EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?))`)
+              AND (? IS NULL OR EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?))
+              AND (? IS NULL OR EXISTS (SELECT 1 FROM release_states WHERE repo = ? AND release_id = ? AND claim_token = ?))`)
             .bind(id, notification.parse_mode, now, now, id, JSON.stringify(notification.messages), notification.repo, JSON.stringify(chats), notification.category,
-              id, token, publication, publication, token));
-          await env.DB.batch(statements);
+              id, token, publication, publication, token, edit, notification.repo, edit, token));
+          const results = await env.DB.batch(statements);
+          if (event === 'release') console.info('github_release_queued', { delivery, messages: results.at(-1).meta.changes });
         }
       }
       // Acknowledge only after persistence; cron recovers interrupted waitUntil work.

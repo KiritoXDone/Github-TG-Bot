@@ -14,7 +14,7 @@
 - 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。跳过草稿 Release 和草稿 PR，正式发布 / 转为待审核后正常通知；预发布仍会通知。
 - GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
-- 新 Release 仅由 `published` 触发，忽略同一次发布附带的 `created` / `released` / `prereleased`；按仓库、Release ID、发布时间去重，避免不同投递 ID 重复通知。已发布版本的编辑、删除和撤回仍会通知。
+- 新 Release 仅由 `published` 触发，忽略同一次发布附带的 `created` / `released` / `prereleased`；按仓库、Release ID、发布时间去重，避免不同投递 ID 重复通知。编辑时比对名称、版本号、发布说明和预发布状态，内容相同不重复通知；真实修改、删除和撤回仍会通知。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
 - Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
