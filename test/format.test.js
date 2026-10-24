@@ -156,7 +156,7 @@ test('all event states use descriptive headlines and keep their correct link des
     ['issues', { action: 'closed', issue: { number: 3, state_reason: 'not_planned' } }, '🚫 *Closed issue*'],
     ['pull_request', { action: 'ready_for_review', pull_request: { ...pr, draft: false } }, '🔍 *Pull request ready for review*'],
     ['pull_request', { action: 'review_requested', pull_request: pr }, '🔍 *Review requested for*'],
-    ['release', { action: 'prereleased', release: { tag_name: 'v2' } }, '🧪 *New pre\\-release*'],
+    ['release', { action: 'published', release: { tag_name: 'v2', prerelease: true } }, '🧪 *New pre\\-release*'],
     ['release', { action: 'unpublished', release: { tag_name: 'v2' } }, '📥 *Unpublished release*'],
     ['pull_request_review', { action: 'submitted', review: { state: 'approved' }, pull_request: pr }, '✅ *Approved pull request*'],
     ['pull_request_review', { action: 'submitted', review: { state: 'changes_requested' }, pull_request: pr }, '🛠️ *Changes requested on*'],

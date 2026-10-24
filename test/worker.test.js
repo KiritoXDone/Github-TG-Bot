@@ -195,6 +195,36 @@ test('draft webhooks are acknowledged without queuing; publication renders Markd
   assert.ok(sent.find(message => message.chat_id === '-10099').text.endsWith('*Ready* for review'));
 });
 
+test('overlapping release actions and distinct delivery IDs announce each publication once', async () => {
+  await command(`/sub ${repo} release --to @release_news`);
+  sent = [];
+  const release = { id: 422499154, tag_name: 'v1.2.55', draft: false, prerelease: false,
+    published_at: '2026-10-24T03:50:03Z', body: '**Changes**' };
+  for (const action of ['created', 'released', 'prereleased']) {
+    assert.equal((await github('release', { action, release })).status, 200);
+  }
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ?').bind(repo).first()).n, 0);
+  const delivery = randomUUID();
+  const results = await Promise.all([delivery, delivery, randomUUID(), randomUUID()].map(id =>
+    github('release', { action: 'published', release }, id)));
+  assert.ok(results.every(result => result.status === 200));
+  await settled();
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.startsWith('🚀 *New release*'));
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM receipts WHERE id LIKE 'release-published:%'").first()).n, 1);
+  await github('release', { action: 'edited', release: { ...release, body: '**Updated notes**' } });
+  await settled();
+  assert.equal(sent.length, 2, 'published release edits remain visible');
+  assert.ok(sent[1].text.startsWith('✏️ *Updated release*'));
+  await github('release', { action: 'published', release: { ...release, published_at: '2026-10-25T03:50:03Z' } });
+  await settled();
+  assert.equal(sent.length, 3, 'a later republication is a distinct event');
+  await github('release', { action: 'published', release: { ...release, id: 422499155, prerelease: true } });
+  await settled();
+  assert.equal(sent.length, 4, 'a different release with the same timestamp is distinct');
+  assert.ok(sent[3].text.startsWith('🧪 *New pre\\-release*'));
+});
+
 test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {
   await command(`/sub ${repo} commits`);
   await command(`/sub ${repo} commits`, { chat: -10099, thread: 7 });

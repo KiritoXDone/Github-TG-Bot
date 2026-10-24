@@ -6,6 +6,12 @@ import { prune, receiptStatements } from './storage.js';
 
 const json = (body, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 
+function publicationReceipt(repo, release) {
+  if (!Number.isSafeInteger(release?.id) || release.id <= 0 || typeof release.published_at !== 'string') return null;
+  const published = Date.parse(release.published_at);
+  return Number.isFinite(published) ? `release-published:${repo}:${release.id}:${published}` : null;
+}
+
 export default {
   async fetch(request, env, ctx) {
     try {
@@ -33,11 +39,20 @@ export default {
         const payload = parseBody(body);
         if (event === 'ping') return json({ ok: true, message: 'pong' });
         const notification = formatEvent(event, payload);
+        if (event === 'release') {
+          // Keep diagnostic metadata, never webhook secrets or release bodies.
+          console.info('github_release_event', { delivery, action: String(payload.action || '').slice(0, 40),
+            release_id: Number.isSafeInteger(payload.release?.id) ? payload.release.id : null,
+            draft: payload.release?.draft === true, eligible: notification !== null });
+        }
         if (notification) {
           const id = `gh:${delivery}`;
           const token = crypto.randomUUID();
           const chats = ids(env.ALLOWED_CHAT_IDS).length ? ids(env.ALLOWED_CHAT_IDS) : ids(env.ALLOWED_USER_IDS);
           const statements = receiptStatements(env.DB, id, token, now);
+          const publication = event === 'release' && payload.action === 'published'
+            ? publicationReceipt(notification.repo, payload.release) : null;
+          if (publication) statements.push(...receiptStatements(env.DB, publication, token, now));
           // All pages and recipients share one transaction and receipt. json_each
           // keeps large pushes within D1's query/parameter limits without dropping pages.
           statements.push(env.DB.prepare(`INSERT OR IGNORE INTO outbox
@@ -49,7 +64,7 @@ export default {
               AND (d.enabled = 1 OR (d.chat_id IS NULL AND s.chat_id IN (SELECT value FROM json_each(?))))
               AND EXISTS (SELECT 1 FROM json_each(s.events) WHERE value = ?)
               AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)`)
-            .bind(id, notification.parse_mode, now, now, id, JSON.stringify(notification.messages), notification.repo, JSON.stringify(chats), notification.category, id, token));
+            .bind(id, notification.parse_mode, now, now, id, JSON.stringify(notification.messages), notification.repo, JSON.stringify(chats), notification.category, publication || id, token));
           await env.DB.batch(statements);
         }
       }

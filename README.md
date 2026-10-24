@@ -14,6 +14,7 @@
 - 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。跳过草稿 Release 和草稿 PR，正式发布 / 转为待审核后正常通知；预发布仍会通知。
 - GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
+- 新 Release 仅由 `published` 触发，忽略同一次发布附带的 `created` / `released` / `prereleased`；按仓库、Release ID、发布时间去重，避免不同投递 ID 重复通知。已发布版本的编辑、删除和撤回仍会通知。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
 - Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
@@ -184,7 +185,7 @@ npm run telegram:setup
 | `issues` | `issues` | 🐛 Issue；✅ 完成、🚫 不计划处理、🔴 其他关闭、🔄 重开 |
 | `pr` | `pull_request` | 🔌 创建、🔄 同步、🔀 合并、🚫 未合并关闭；草稿不推送 |
 | `commits` | `push` | 🔨 提交摘要与作者、🌱 新分支、🏷️ 标签、⚠️ 强推、🗑️ 删除分支/标签 |
-| `release` | `release` | 🚀 发布、🧪 预发布、📦 创建、📥 撤回发布；草稿不推送 |
+| `release` | `release` | 🚀 发布、🧪 预发布、✏️ 编辑、🗑️ 删除、📥 撤回发布；草稿不推送 |
 | `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | 💬 评论、✏️ 编辑、🗑️ 删除 |
 | `reviews` | `pull_request_review` | 🔍 审查、✅ 批准、🛠️ 请求修改、💬 意见、🚫 撤销审查 |
 | `actions` | `workflow_run` | 仅 completed：✅ 成功、❌ 失败、⏱️ 超时、⏹️ 取消、⏭️ 跳过、⚠️ 需处理 |
@@ -193,7 +194,7 @@ npm run telegram:setup
 
 `commits` 按一次 Push 汇总所有收到的提交，不限制为前几条；超出消息长度时自动分成带页码的多条消息，哈希和链接保持完整。每个提交展示第一行摘要（最多 180 字符）和作者（最多 80 字符），不使用推送者替代提交作者。不同 Push 分别处理，不按分钟聚合。GitHub 自身的 Push Webhook 最多包含 2048 个提交；本实现展示 Webhook 中实际包含的全部条目，不通过 GitHub API 补取超出部分。[GitHub Push 负载说明](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
 
-事件分类过滤不进一步区分 action；例如 Release 的 created/published/edited 是不同事件，都可能产生通知。未支持的 Webhook 事件返回 200 并忽略。
+订阅按事件分类过滤。草稿和重复的 Release 发布动作会进一步跳过：新版本只接受 `published`，已发布版本的编辑等仍分别通知。未支持的 Webhook 事件返回 200 并忽略。
 
 ## 投递行为和限制
 

@@ -151,15 +151,18 @@ Name 最多 250 字符，tag 最多 180 字符；发布说明最多 2400 字符�
 
 | action | 标题文字 |
 | --- | --- |
-| `published` / `released` / `prereleased` / `created` | `New release` |
+| `published` | `New release` |
+| `created` / `released` / `prereleased` | 不推送，避免同一次发布重复通知 |
 | `edited` | `Updated release` |
 | `deleted` | `Deleted release` |
 | `unpublished` | `Unpublished release` |
 | 其他或缺失 | `Updated release` |
 
-`release.draft=true` 时直接跳过，不进入发送队列。非草稿的预发布（含 `prereleased`）把 `release` 替换为 `pre-release`，例如 `New pre-release`。
+`release.draft=true` 时直接跳过，不进入发送队列。非草稿且 `release.prerelease=true` 的发布把 `release` 替换为 `pre-release`，例如 `New pre-release`。
 
-Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 预发布 🧪 → `created` 📦 → 其他 🚀。
+新版本只接受 `published`，它同时覆盖正式发布和预发布，包括从草稿发布；参见 [GitHub 发布事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release)。除投递 ID 去重外，还按仓库、Release ID、`published_at` 原子去重（保留 30 天），避免多个不同 ID 的发布请求重复入队。编辑不受发布去重影响；不同 Release 或不同发布时间独立通知。缺少有效 Release ID / 发布时间的请求保留原投递 ID 去重。
+
+Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 预发布 🧪 → 其他 🚀。
 
 ### 3.5 评论
 

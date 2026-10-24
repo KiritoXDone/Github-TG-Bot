@@ -57,8 +57,7 @@ function eventEmoji(event, p) {
     case 'release':
       if (p.action === 'deleted' || p.action === 'edited') return CHANGE_EMOJI[p.action];
       if (p.action === 'unpublished') return '📥';
-      if (p.release?.prerelease || p.action === 'prereleased') return '🧪';
-      return p.action === 'created' ? '📦' : '🚀';
+      return p.release?.prerelease ? '🧪' : '🚀';
     case 'issue_comment':
     case 'commit_comment':
     case 'pull_request_review_comment':
@@ -103,8 +102,8 @@ function pullRequestActivity(p) {
 }
 
 function releaseActivity(p) {
-  const kind = p.release.prerelease || p.action === 'prereleased' ? 'pre-release' : 'release';
-  const verbs = { published: 'New', released: 'New', prereleased: 'New', created: 'New',
+  const kind = p.release.prerelease ? 'pre-release' : 'release';
+  const verbs = { published: 'New',
     edited: 'Updated', deleted: 'Deleted', unpublished: 'Unpublished' };
   return `${Object.hasOwn(verbs, p.action) ? verbs[p.action] : 'Updated'} ${kind}`;
 }
@@ -171,6 +170,9 @@ export function formatEvent(event, p) {
   const repo = repoName(p.repository?.full_name);
   if (!repo) return null;
   if (event === 'release' && p.release?.draft) return null;
+  // GitHub emits overlapping release actions for one publication. published
+  // covers stable releases and pre-releases, including publication from drafts.
+  if (event === 'release' && ['created', 'released', 'prereleased'].includes(p.action)) return null;
   if (p.pull_request?.draft || (event === 'pull_request' && p.action === 'converted_to_draft')) return null;
   const repoUrl = `https://github.com/${repo}`;
   const project = p.repository.full_name.split('/')[1];
