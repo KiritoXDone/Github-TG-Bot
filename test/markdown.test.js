@@ -62,3 +62,35 @@ test('keeps bounded work for oversized, punctuation-heavy and malformed bodies',
     assert.ok(result.isWellFormed());
   }
 });
+
+test('renders GitHub details as a Telegram expandable quote with a summary heading', () => {
+  assert.equal(render('<details>\n<summary>English</summary>• Improve picker.\n• Fix loading.\n\n</details>'),
+    '**>*English*\n>• Improve picker\\.\n>• Fix loading\\.||');
+  assert.equal(render('中文说明\n\n<details>\n<summary>**English**</summary>\n\n- **Fix** loading\n- Improve navigation\n\n</details>\n\nAfter'),
+    '中文说明\n\n**>*English*\n>• *Fix* loading\n>• Improve navigation||\n\nAfter');
+  assert.equal(render('<details open><summary>English</summary>Shown</details>'), '>*English*\n>Shown');
+  assert.equal(render('<details>No summary</details>'), '**>*Details*\n>No summary||');
+  assert.equal(render('<details><summary><b>English &amp; notes</b></summary>Body</details>'), '**>*English & notes*\n>Body||');
+});
+
+test('handles adjacent and nested details without nesting Telegram quotes or consuming surrounding text', () => {
+  assert.equal(render('<details><summary>One</summary>First</details>\n<details><summary>Two</summary>Second</details>'),
+    '**>*One*\n>First||\n\n**>*Two*\n>Second||');
+  assert.equal(render('<details><summary>Outer</summary>Before\n\n<details><summary>Inner</summary>Inside</details>\n\nAfter</details>'),
+    '**>*Outer*\n>Before\n>\n>*Inner*\n>Inside\n>\n>After||');
+  assert.equal(render('> <details><summary>English</summary>\n> Body\n> </details>'), '>*English*\n>Body');
+  assert.ok(render('<details><summary>English</summary>`</details>`\n\n<!-- </details> -->\n\nEnd</details>').endsWith('>End||'));
+  assert.equal(render('```html\n<details><summary>Example</summary></details>\n```'),
+    '```html\n<details><summary>Example</summary></details>\n```');
+});
+
+test('keeps expandable details valid when closing tags are missing or long content is truncated', () => {
+  assert.equal(render('<details><summary>English</summary>Unclosed **bold**'), '**>*English*\n>Unclosed *bold*||');
+  for (const budget of [1, 15, 50, 3900]) {
+    const result = render('<details><summary>English</summary>\n\n' + '🧑'.repeat(12000) + '</details>', { budget });
+    assert.ok(result.length <= budget);
+    assert.ok(result.isWellFormed());
+    assert.ok(result === '…' || result.endsWith('…||'));
+    assert.doesNotMatch(result, /<\/?details|<\/?summary|\|\|…/);
+  }
+});

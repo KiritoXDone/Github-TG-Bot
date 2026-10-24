@@ -1,10 +1,40 @@
-import { Lexer } from 'marked';
+import { Marked } from 'marked';
 
 export const escapeMarkdown = (text) => text.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
 const escapeCode = (text) => text.replace(/[`\\]/g, '\\$&');
 const text = (value, escape = escapeMarkdown) => ({ value, escape });
 const wrap = (children, open = '', close = '') => ({ children, open, close });
 const prefix = (value, length) => value.slice(0, length).replace(/[\uD800-\uDBFF]$/, '');
+
+const markdown = new Marked({ gfm: true, extensions: [{
+  name: 'details', level: 'block',
+  start(source) { return source.search(/^ {0,3}<details(?=[\s>])/im); },
+  tokenizer(source) {
+    const opening = /^ {0,3}<details(?:\s[^>]*)?>/i.exec(source);
+    if (!opening) return;
+    // Consume the whole block, including blank lines. Nested details are balanced;
+    // comments and code examples cannot accidentally close the outer block.
+    const markers = /<!--[\s\S]*?(?:-->|$)|(`+|~{3,})[\s\S]*?\1|<\/?details(?:\s[^>]*)?>/gi;
+    markers.lastIndex = opening[0].length;
+    let depth = 1;
+    let end = source.length;
+    let bodyEnd = end;
+    for (const marker of source.matchAll(markers)) {
+      if (/^<details[\s>]/i.test(marker[0])) depth++;
+      else if (/^<\/details[\s>]/i.test(marker[0]) && --depth === 0) {
+        bodyEnd = marker.index;
+        end = marker.index + marker[0].length;
+        break;
+      }
+    }
+    let body = source.slice(opening[0].length, bodyEnd).trim();
+    const summary = /^<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary\s*>\s*/i.exec(body);
+    if (summary) body = body.slice(summary[0].length);
+    return { type: 'details', raw: source.slice(0, end),
+      summary: this.lexer.inlineTokens(summary ? summary[1].replace(/<[^>]*>/g, '').trim() || 'Details' : 'Details'),
+      tokens: this.lexer.blockTokens(body), open: /\sopen(?:\s|=|>)/i.test(opening[0]) };
+  },
+}] });
 
 function decode(value) {
   const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
@@ -67,6 +97,12 @@ function nodes(tokens, base, context = {}) {
         const content = children({ quote: true });
         return context.quote ? content : [{ ...wrap(content), quote: true, trimEnd: true }, text('\n\n')];
       }
+      case 'details': {
+        const content = [wrap(nodes(token.summary, base, { ...context, quote: true, '*': true }), '*', '*'),
+          text('\n'), ...children({ quote: true })];
+        // Telegram quotations cannot nest; retain inner headings and prose.
+        return context.quote ? content : [{ ...wrap(content), quote: true, expandable: !token.open, trimEnd: true }, text('\n\n')];
+      }
       case 'list':
         return [...(context.indent ? [text('\n')] : []), ...token.items.flatMap((item, index) => [
           text(`${'  '.repeat(context.indent || 0)}${item.task ? (item.checked ? '☑' : '☐') : token.ordered ? `${token.start + index}.` : '•'} `),
@@ -101,8 +137,11 @@ function render(tree, limit) {
       } else {
         let content = visit(node.children);
         if (node.trimEnd) content = content.trimEnd();
-        part = content ? node.quote ? content.split('\n').map(line => `>${line}`).join('\n')
-          : node.open + content + node.close : '';
+        if (!content) part = '';
+        else if (node.quote) {
+          part = content.split('\n').map(line => `>${line}`).join('\n');
+          if (node.expandable) part = `**${part}||`;
+        } else part = node.open + content + node.close;
       }
       // Adjacent italic entities must not accidentally become an underline.
       if (result.endsWith('_') && part.startsWith('_')) result += '**';
@@ -120,11 +159,13 @@ export function renderMarkdown(source, { budget = 3000, maxText = 2400, base } =
   // Bound parsing work independently of GitHub's much larger webhook limit.
   const input = prefix(source, 16000);
   let tree;
-  try { tree = nodes(Lexer.lex(input, { gfm: true }), base); }
+  try { tree = nodes(markdown.lexer(input), base); }
   catch { tree = [text(input)]; }
   const formatted = (limit) => {
     const { output, truncated } = render(tree, limit);
-    return output + (truncated || input.length < source.length ? '…' : '');
+    if (!truncated && input.length === source.length) return output;
+    // The expandable quote marker must remain at the end of its last line.
+    return output.endsWith('||') ? `${output.slice(0, -2)}…||` : `${output}…`;
   };
   if (formatted(maxText).length <= budget) return formatted(maxText);
   let low = 0;

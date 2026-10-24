@@ -178,7 +178,7 @@ test('draft webhooks are acknowledged without queuing; publication renders Markd
   await command(`/sub ${repo} release --to @release_news`);
   await command(`/sub ${repo} pr`, { chat: -10099 });
   sent = [];
-  const release = { draft: true, tag_name: 'v2', body: '## Changes\n\n- **Fix** startup\n- Read [notes](https://example.com/notes)' };
+  const release = { draft: true, tag_name: 'v2', body: '## Changes\n\n- **Fix** startup\n- Read [notes](https://example.com/notes)\n\n<details><summary>English</summary>\n\n- **Fix** startup\n- Improve loading\n\n</details>' };
   for (const action of ['created', 'edited', 'deleted']) {
     assert.equal((await github('release', { action, release })).status, 200);
   }
@@ -191,7 +191,8 @@ test('draft webhooks are acknowledged without queuing; publication renders Markd
   assert.equal(sent.length, 2);
   const channel = sent.find(message => message.chat_id === '-10077');
   assert.equal(channel.parse_mode, 'MarkdownV2');
-  assert.ok(channel.text.endsWith('*Changes*\n\n• *Fix* startup\n• Read [notes](https://example.com/notes)'));
+  assert.ok(channel.text.includes('*Changes*\n\n• *Fix* startup\n• Read [notes](https://example.com/notes)'));
+  assert.ok(channel.text.endsWith('**>*English*\n>• *Fix* startup\n>• Improve loading||'));
   assert.ok(sent.find(message => message.chat_id === '-10099').text.endsWith('*Ready* for review'));
 });
 

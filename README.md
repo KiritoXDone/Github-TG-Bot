@@ -19,6 +19,7 @@
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
 - Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
 - 通知使用 GitHubBot 风格的 MarkdownV2 排版：首行是事件和对象链接，作者另起一行；Push 用提交数量链接到 Compare，每条提交显示短哈希、摘要和作者，作者可点击跳转 GitHub 主页（需事件提供关联账号）。Release、Issue、PR、评论、Review 正文渲染 Markdown 的标题、粗斜体、删除线、列表、引用、链接和代码，截断时保留完整格式和链接。
+- GitHub `<details><summary>…</summary>…</details>` 转为 Telegram 可展开引用块，summary 显示为粗体标题，内部正文继续解析 Markdown；带 `open` 时保持展开，嵌套折叠内容展平。
 - Release 标题与版本号合并为一个链接；各类状态使用简洁英文描述，如 `New release`、`Merged pull request`、`Workflow succeeded`。Issue、PR、评论、Push 参考公开样例，其余事件沿用同一风格；当前不支持回复通知向 GitHub 发布评论。
 - 完整文案与通知格式见 [当前消息文本模板](docs/message-templates.md)。
 - `/status` 检查投递状态，`/retry` 重试失败消息。
