@@ -63,8 +63,10 @@ export default {
             LEFT JOIN destinations d ON d.chat_id = s.chat_id WHERE s.repo = ?
               AND (d.enabled = 1 OR (d.chat_id IS NULL AND s.chat_id IN (SELECT value FROM json_each(?))))
               AND EXISTS (SELECT 1 FROM json_each(s.events) WHERE value = ?)
-              AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)`)
-            .bind(id, notification.parse_mode, now, now, id, JSON.stringify(notification.messages), notification.repo, JSON.stringify(chats), notification.category, publication || id, token));
+              AND EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?)
+              AND (? IS NULL OR EXISTS (SELECT 1 FROM receipts WHERE id = ? AND token = ?))`)
+            .bind(id, notification.parse_mode, now, now, id, JSON.stringify(notification.messages), notification.repo, JSON.stringify(chats), notification.category,
+              id, token, publication, publication, token));
           await env.DB.batch(statements);
         }
       }

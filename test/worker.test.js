@@ -225,6 +225,21 @@ test('overlapping release actions and distinct delivery IDs announce each public
   assert.ok(sent[3].text.startsWith('🧪 *New pre\\-release*'));
 });
 
+test('publication deduplication still respects receipts stored before the upgrade', async () => {
+  await command(`/sub ${repo} release --to @release_news`);
+  sent = [];
+  const delivery = randomUUID();
+  const release = { id: 422499154, draft: false, tag_name: 'v1.2.55', published_at: '2026-10-24T03:50:03Z' };
+  await db.prepare('INSERT INTO receipts (id, token, created_at) VALUES (?, ?, ?)')
+    .bind(`gh:${delivery}`, 'old-worker-token', Math.floor(Date.now() / 1000)).run();
+  await github('release', { action: 'published', release }, delivery);
+  await settled();
+  assert.equal(sent.length, 0, 'an already processed delivery must not be sent again');
+  await github('release', { action: 'published', release });
+  await settled();
+  assert.equal(sent.length, 0, 'the replay also seeds publication deduplication for different IDs');
+});
+
 test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {
   await command(`/sub ${repo} commits`);
   await command(`/sub ${repo} commits`, { chat: -10099, thread: 7 });
