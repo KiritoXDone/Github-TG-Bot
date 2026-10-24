@@ -1,3 +1,5 @@
+import { escapeMarkdown as md, renderMarkdown } from './markdown.js';
+
 export const EVENTS = ['issues', 'pr', 'commits', 'release', 'comments', 'reviews', 'actions', 'stars', 'forks'];
 export const DEFAULT_EVENTS = ['issues', 'pr', 'commits', 'release'];
 
@@ -23,9 +25,7 @@ function url(value) {
   catch { return ''; }
 }
 
-// Telegram MarkdownV2 differs from GitHub Markdown. Escape all untrusted text,
-// and only add our own formatting after truncation so entities stay balanced.
-const md = (value) => value.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+// Titles and commit summaries remain literal; prose bodies render Markdown.
 const line = (value, max) => clip(value, max).replace(/\s+/g, ' ').trim();
 const bold = (value) => value ? `*${md(value)}*` : '';
 const href = (label, target) => `[${md(label)}](${target.replace(/[)\\]/g, '\\$&')})`;
@@ -53,12 +53,10 @@ function eventEmoji(event, p) {
       return pickEmoji(CHANGE_EMOJI, p.action, '🐛');
     case 'pull_request':
       if (p.action === 'closed') return p.pull_request?.merged ? '🔀' : '🚫';
-      if (p.action === 'converted_to_draft' || (p.action === 'opened' && p.pull_request?.draft)) return '📝';
       return pickEmoji({ ...CHANGE_EMOJI, synchronize: '🔄', ready_for_review: '🔍', review_requested: '🔍' }, p.action, '🔌');
     case 'release':
       if (p.action === 'deleted' || p.action === 'edited') return CHANGE_EMOJI[p.action];
       if (p.action === 'unpublished') return '📥';
-      if (p.release?.draft) return '📝';
       if (p.release?.prerelease || p.action === 'prereleased') return '🧪';
       return p.action === 'created' ? '📦' : '🚀';
     case 'issue_comment':
@@ -94,9 +92,8 @@ function activity(action, noun) {
 
 function pullRequestActivity(p) {
   if (p.action === 'closed' && p.pull_request.merged) return 'Merged pull request';
-  if (p.action === 'opened' && p.pull_request.draft) return 'New draft pull request';
   const phrases = {
-    synchronize: 'Updated pull request', converted_to_draft: 'Converted to draft',
+    synchronize: 'Updated pull request',
     ready_for_review: 'Pull request ready for review', review_requested: 'Review requested for',
     review_request_removed: 'Review request removed from',
     auto_merge_enabled: 'Auto-merge enabled for', auto_merge_disabled: 'Auto-merge disabled for',
@@ -106,8 +103,7 @@ function pullRequestActivity(p) {
 }
 
 function releaseActivity(p) {
-  const kind = p.release.draft ? 'draft release'
-    : p.release.prerelease || p.action === 'prereleased' ? 'pre-release' : 'release';
+  const kind = p.release.prerelease || p.action === 'prereleased' ? 'pre-release' : 'release';
   const verbs = { published: 'New', released: 'New', prereleased: 'New', created: 'New',
     edited: 'Updated', deleted: 'Deleted', unpublished: 'Unpublished' };
   return `${Object.hasOwn(verbs, p.action) ? verbs[p.action] : 'Updated'} ${kind}`;
@@ -174,6 +170,8 @@ function pushMessages(header, commits, repoUrl) {
 export function formatEvent(event, p) {
   const repo = repoName(p.repository?.full_name);
   if (!repo) return null;
+  if (event === 'release' && p.release?.draft) return null;
+  if (p.pull_request?.draft || (event === 'pull_request' && p.action === 'converted_to_draft')) return null;
   const repoUrl = `https://github.com/${repo}`;
   const project = p.repository.full_name.split('/')[1];
   const actor = line(p.sender?.login || 'GitHub', 80);
@@ -183,6 +181,7 @@ export function formatEvent(event, p) {
   let category;
   let title;
   let body = '';
+  let bodyLimit = 1200;
   let details = '';
   let by = 'by';
   const linkedTitle = (phrase, label, target) => `${emoji} ${bold(phrase)} ${href(label, url(target) || repoUrl)}`;
@@ -210,14 +209,14 @@ export function formatEvent(event, p) {
       if (!p.issue) return null;
       category = 'issues';
       title = linkedTitle(activity(p.action, 'issue'), issueLabel(p.issue), p.issue.html_url);
-      body = clip(p.issue.body, 1200);
+      body = p.issue.body;
       break;
     case 'pull_request':
       if (!p.pull_request) return null;
       category = 'pr';
       title = linkedTitle(pullRequestActivity(p), issueLabel(p.pull_request), p.pull_request.html_url);
       by = 'by:';
-      body = clip(p.pull_request.body, 1200);
+      body = p.pull_request.body;
       break;
     case 'release': {
       if (!p.release) return null;
@@ -227,7 +226,8 @@ export function formatEvent(event, p) {
       const label = name && tag && !name.includes(tag) ? `${name} · ${tag}` : name || tag || 'Release';
       const subject = label.toLowerCase().includes(project.toLowerCase()) ? label : `${project} ${label}`;
       title = linkedTitle(releaseActivity(p), subject, url(p.release.html_url) || `${repoUrl}/releases`);
-      body = clip(p.release.body, 2400);
+      body = p.release.body;
+      bodyLimit = 2400;
       break;
     }
     case 'issue_comment':
@@ -239,14 +239,16 @@ export function formatEvent(event, p) {
       const commit = line(p.comment.commit_id, 80).slice(0, 7);
       const subject = issue ? issueLabel(issue) : `${project}${commit ? `@${commit}` : ''}`;
       title = linkedTitle(`${activity(p.action, 'comment')} on`, subject, p.comment.html_url);
-      body = clip(p.comment.body, 2000);
+      body = p.comment.body;
+      bodyLimit = 2000;
       break;
     }
     case 'pull_request_review':
       if (!p.review || !p.pull_request) return null;
       category = 'reviews';
       title = linkedTitle(reviewActivity(p), issueLabel(p.pull_request), p.review.html_url);
-      body = clip(p.review.body, 2000);
+      body = p.review.body;
+      bodyLimit = 2000;
       break;
     case 'workflow_run': {
       if (p.action !== 'completed' || !p.workflow_run) return null;
@@ -268,6 +270,7 @@ export function formatEvent(event, p) {
   }
   let text = `${title}\n${by} ${actorLabel}`;
   if (details) text += `\n\n${details}`;
-  if (body.trim()) text += `\n\n${fit(body.trim(), MAX_MESSAGE - text.length - 2, md)}`;
+  const renderedBody = renderMarkdown(body, { budget: MAX_MESSAGE - text.length - 2, maxText: bodyLimit, base: `${repoUrl}/` });
+  if (renderedBody) text += `\n\n${renderedBody}`;
   return { repo, category, messages: [text], parse_mode: 'MarkdownV2' };
 }

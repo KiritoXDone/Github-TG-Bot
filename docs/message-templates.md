@@ -1,6 +1,6 @@
 # 当前消息文本模板
 
-更新日期：2026-10-23。
+更新日期：2026-10-24。
 
 这是面向 Telegram 的文本审阅清单，包含全部 9 类事件通知、命令回复、命令菜单和用户错误提示。模板实际由 `src/format.js`、`src/bot.js`、`src/targets.js` 生成；修改本文件不会直接改变 Bot。
 
@@ -13,17 +13,19 @@
 🚀 **New release** [Miaopu 2.3.3](https://github.com/KiritoXDone/Miaopu/releases/tag/2.3.3)<br>
 by [@KiritoXDone](https://github.com/KiritoXDone)
 
-\- 修复比赛详情中切换队伍时色块跳动的问题。
+• 修复比赛详情中切换队伍时色块跳动的问题。
 
 ## 2. 所有通知共用的规则
 
 - 首行直接展示事件和带链接的对象，仓库使用短名 `repo`，保留 GitHub 大小写；没有独立的 `owner/repo` 标题行。
 - 普通 Push 在每条提交后显示提交作者。其他事件第二行为 `by @操作人`，PR 使用样例中的 `by: @操作人`。操作人链接到 GitHub 主页；Commit 作者保留显示名称，并链接到事件提供的作者 GitHub 账号，缺少有效账号时保留纯文本。
 - 事件使用英文描述，例如 `New issue`、`Merged pull request`、`New release`、`Workflow succeeded`。
-- 正文直接展示，保留换行；正文原有 Markdown 符号按文字转义，不作为 Telegram 格式执行，不整体包入引用块。
+- Release、Issue、PR、评论和 Review 正文把 GitHub Markdown 转为 Telegram MarkdownV2：[Telegram 格式说明](https://core.telegram.org/bots/api#markdownv2-style)。标题显示为粗体，支持粗斜体、删除线、行内代码、代码块、行内链接、列表、任务列表和引用。标题字段与 Commit 摘要保持字面文本。
+- 表格转为可读文本行；图片显示为图片文字链接；HTML 注释省略，其他原始 HTML 按文字显示（`<br>` 转换为换行）。Telegram 不允许的嵌套（如粗体里的代码）保留文字，嵌套引用展平。只允许 HTTP(S) 正文链接，不携带账号密码。
+- 草稿 Release、草稿 PR 及转为草稿的事件不推送；发布或 `ready_for_review` 后恢复通知，预发布正常推送。Review / 评论事件携带 `pull_request.draft=true` 时同样跳过；普通 `issue_comment` 不提供 PR 草稿状态，不额外查询 GitHub。
 - 对象标题、提交数量、哈希、作者使用行内链接，模板不额外附加原文 URL。正文中用户自行写入的 URL 仍作为原文保留。
 - 当前 Bot 没有回复回写 GitHub 的功能，因此不显示官方样例中的回复评论提示。
-- 非 Push 长字段和长正文以 `…` 截断，完整链接保留。Push 的提交条数不设上限，超长按完整提交行分页。每条 Markdown 源文本不超过 3900 字符。
+- 非 Push 长字段和长正文以 `…` 截断，完整链接及格式闭合保留。正文字符额度按解析后的文字计算；最多解析前 16000 个字符。Push 的提交条数不设上限，超长按完整提交行分页。每条 Markdown 源文本不超过 3900 字符。
 - 下方代码块使用 Telegram MarkdownV2 的形式：`*文字*` 表示加粗，`[文字](链接)` 表示行内链接。`{变量}` 是占位符；实际发送时由程序代入并转义。
 - 为便于审阅，示例省略运行时的特殊字符转义，不能直接当作 Telegram API 请求体发送。
 - Bot 管理命令回复保持纯文本，见第 5 节。
@@ -115,8 +117,7 @@ by: [@{操作人}]({操作人主页})
 
 | 场景 | 标题文字 | emoji |
 | --- | --- | --- |
-| 新建草稿 | `New draft pull request` | 📝 |
-| 转为草稿 | `Converted to draft` | 📝 |
+| 新建草稿 / 仍为草稿 / 转为草稿 | 不推送 | — |
 | 同步提交 | `Updated pull request` | 🔄 |
 | 准备审查 | `Pull request ready for review` | 🔍 |
 | 请求审查 | `Review requested for` | 🔍 |
@@ -156,9 +157,9 @@ Name 最多 250 字符，tag 最多 180 字符；发布说明最多 2400 字符�
 | `unpublished` | `Unpublished release` |
 | 其他或缺失 | `Updated release` |
 
-草稿时把 `release` 替换为 `draft release`；预发布（含 `prereleased`）替换为 `pre-release`，草稿优先。例如 `New pre-release`。
+`release.draft=true` 时直接跳过，不进入发送队列。非草稿的预发布（含 `prereleased`）把 `release` 替换为 `pre-release`，例如 `New pre-release`。
 
-Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 草稿 📝 → 预发布 🧪 → `created` 📦 → 其他 🚀。
+Emoji 优先级：删除 🗑️ → 编辑 ✏️ → 撤回 📥 → 预发布 🧪 → `created` 📦 → 其他 🚀。
 
 ### 3.5 评论
 

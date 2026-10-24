@@ -11,17 +11,17 @@
 - `/sub owner/repo` 订阅；个人、群聊、群话题、频道分别管理订阅及事件类型。
 - 私聊中使用 `--to me`、`--to @频道名`、`--to 群ID` 指定通知目标；无需修改 Cloudflare 配置。
 - `/targets` 查看通知目标，`/target add` 连接目标，`/target remove` 停用目标并清理其订阅。
-- 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。
+- 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。跳过草稿 Release 和草稿 PR，正式发布 / 转为待审核后正常通知；预发布仍会通知。
 - GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题，长列表分页，长通知截断并保留 GitHub 原文链接。
 - Push 收到多少个 Commit 就展示多少个；超长自动分页并按顺序投递，限流后从未发送的页继续。
-- 通知使用 GitHubBot 风格的 MarkdownV2 排版：首行是事件和对象链接，作者另起一行，正文直接展示；Push 用提交数量链接到 Compare，每条提交显示短哈希、摘要和作者，作者可点击跳转 GitHub 主页（需事件提供关联账号）。正文特殊字符安全转义。
+- 通知使用 GitHubBot 风格的 MarkdownV2 排版：首行是事件和对象链接，作者另起一行；Push 用提交数量链接到 Compare，每条提交显示短哈希、摘要和作者，作者可点击跳转 GitHub 主页（需事件提供关联账号）。Release、Issue、PR、评论、Review 正文渲染 Markdown 的标题、粗斜体、删除线、列表、引用、链接和代码，截断时保留完整格式和链接。
 - Release 标题与版本号合并为一个链接；各类状态使用简洁英文描述，如 `New release`、`Merged pull request`、`Workflow succeeded`。Issue、PR、评论、Push 参考公开样例，其余事件沿用同一风格；当前不支持回复通知向 GitHub 发布评论。
 - 完整文案与通知格式见 [当前消息文本模板](docs/message-templates.md)。
 - `/status` 检查投递状态，`/retry` 重试失败消息。
-- 零运行时 npm 依赖；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
+- 使用 Marked 解析 GitHub Markdown；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
 
 ```mermaid
 flowchart LR
@@ -182,9 +182,9 @@ npm run telegram:setup
 | 类型 | GitHub Webhook 事件 | 行为 |
 | --- | --- | --- |
 | `issues` | `issues` | 🐛 Issue；✅ 完成、🚫 不计划处理、🔴 其他关闭、🔄 重开 |
-| `pr` | `pull_request` | 🔌 创建、📝 草稿、🔄 同步、🔀 合并、🚫 未合并关闭 |
+| `pr` | `pull_request` | 🔌 创建、🔄 同步、🔀 合并、🚫 未合并关闭；草稿不推送 |
 | `commits` | `push` | 🔨 提交摘要与作者、🌱 新分支、🏷️ 标签、⚠️ 强推、🗑️ 删除分支/标签 |
-| `release` | `release` | 🚀 发布、🧪 预发布、📝 草稿、📦 创建、📥 撤回发布 |
+| `release` | `release` | 🚀 发布、🧪 预发布、📦 创建、📥 撤回发布；草稿不推送 |
 | `comments` | `issue_comment`、`commit_comment`、`pull_request_review_comment` | 💬 评论、✏️ 编辑、🗑️ 删除 |
 | `reviews` | `pull_request_review` | 🔍 审查、✅ 批准、🛠️ 请求修改、💬 意见、🚫 撤销审查 |
 | `actions` | `workflow_run` | 仅 completed：✅ 成功、❌ 失败、⏱️ 超时、⏹️ 取消、⏭️ 跳过、⚠️ 需处理 |

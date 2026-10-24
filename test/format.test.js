@@ -74,7 +74,7 @@ test('push links its count to the comparison and includes each commit author, no
   assert.doesNotMatch(push.messages[0], /octocat|Long explanation|^https?:/m);
 });
 
-test('escapes untrusted Markdown and URL parentheses without allowing injected formatting', () => {
+test('escapes literal title characters and body punctuation while preserving URL parentheses', () => {
   const event = formatEvent('issues', payload({ action: 'opened', issue: { number: 1,
     title: '*boom* [click](https://evil.example)',
     body: '_ * [ ] ( ) ~ ` > # + - = | { } . ! \\',
@@ -154,7 +154,7 @@ test('all event states use descriptive headlines and keep their correct link des
   const pr = { number: 3, title: 'Feature' };
   const fixtures = [
     ['issues', { action: 'closed', issue: { number: 3, state_reason: 'not_planned' } }, '🚫 *Closed issue*'],
-    ['pull_request', { action: 'opened', pull_request: { ...pr, draft: true } }, '📝 *New draft pull request*'],
+    ['pull_request', { action: 'ready_for_review', pull_request: { ...pr, draft: false } }, '🔍 *Pull request ready for review*'],
     ['pull_request', { action: 'review_requested', pull_request: pr }, '🔍 *Review requested for*'],
     ['release', { action: 'prereleased', release: { tag_name: 'v2' } }, '🧪 *New pre\\-release*'],
     ['release', { action: 'unpublished', release: { tag_name: 'v2' } }, '📥 *Unpublished release*'],
@@ -173,6 +173,35 @@ test('all event states use descriptive headlines and keep their correct link des
   const fork = formatEvent('fork', payload(fixtures.at(-1)[1])).messages[0];
   assert.ok(fork.includes('*New fork of* [Github\\-TG\\-Bot](https://github.com/kiritoxdone/github-tg-bot)'));
   assert.ok(fork.endsWith('[octocat/fork](https://github.com/octocat/fork)'));
+});
+
+test('suppresses draft releases and PR activity, then allows published and ready events', () => {
+  for (const action of ['created', 'edited', 'deleted', 'published']) {
+    assert.equal(formatEvent('release', payload({ action, release: { draft: true, tag_name: 'v2' } })), null);
+  }
+  for (const action of ['opened', 'edited', 'synchronize', 'closed', 'converted_to_draft']) {
+    assert.equal(formatEvent('pull_request', payload({ action, pull_request: { draft: true, number: 1 } })), null);
+  }
+  assert.equal(formatEvent('pull_request', payload({ action: 'converted_to_draft', pull_request: { number: 1 } })), null);
+  for (const event of ['pull_request_review', 'pull_request_review_comment']) {
+    assert.equal(formatEvent(event, payload({ pull_request: { draft: true }, review: {}, comment: {} })), null);
+  }
+  assert.equal(formatEvent('release', payload({ action: 'published', release: { draft: false, prerelease: true, tag_name: 'v2-beta' } })).category, 'release');
+  assert.equal(formatEvent('pull_request', payload({ action: 'ready_for_review', pull_request: { draft: false, number: 1 } })).category, 'pr');
+});
+
+test('all prose bodies render GitHub Markdown, with literal metadata and commit summaries', () => {
+  const body = '## Changes\n\n**Fixed** startup with `--safe` and [details](https://example.com/docs).';
+  const cases = [
+    ['release', { release: { body } }], ['issues', { issue: { body } }],
+    ['pull_request', { pull_request: { body } }],
+    ...['issue_comment', 'commit_comment', 'pull_request_review_comment'].map(event => [event, { comment: { body } }]),
+    ['pull_request_review', { review: { body }, pull_request: {} }],
+  ];
+  for (const [event, data] of cases) {
+    const message = formatEvent(event, payload(data)).messages[0];
+    assert.ok(message.endsWith('*Changes*\n\n*Fixed* startup with `--safe` and [details](https://example.com/docs)\\.'), event);
+  }
 });
 
 test('push keeps ref changes explicit, escapes author fields and never attributes missing authors to the pusher', () => {

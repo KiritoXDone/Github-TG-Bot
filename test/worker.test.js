@@ -1,6 +1,7 @@
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createHmac, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { formatEvent } from '../src/format.js';
@@ -23,8 +24,12 @@ const bindings = {
 
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({
-    modules: ['test/worker.js', ...['index', 'bot', 'delivery', 'format', 'security', 'storage', 'targets'].map((name) => `src/${name}.js`)]
-      .map((path) => ({ type: 'ESModule', path })),
+    modules: [
+      ...['test/worker.js', ...['index', 'bot', 'delivery', 'format', 'markdown', 'security', 'storage', 'targets'].map((name) => `src/${name}.js`)]
+        .map((path) => ({ type: 'ESModule', path })),
+      // Unbundled workerd resolves the bare import relative to src/markdown.js.
+      { type: 'ESModule', path: 'src/marked', contents: await readFile(fileURLToPath(import.meta.resolve('marked')), 'utf8') },
+    ],
     compatibilityDate: '2026-10-01', d1Databases: ['DB'], bindings,
     outboundService: async (request) => {
       const url = new URL(request.url);
@@ -167,6 +172,27 @@ test('subscribes, delivers an issue, and deduplicates concurrent GitHub redelive
   assert.equal(sent[0].parse_mode, undefined, 'command replies remain plain text');
   assert.ok(notifications[0].text.includes('[github\\-tg\\-bot\\#1 <b\\>Bug</b\\>]('));
   assert.ok(notifications[0].text.endsWith('\n\nDetails'));
+});
+
+test('draft webhooks are acknowledged without queuing; publication renders Markdown through delivery', async () => {
+  await command(`/sub ${repo} release --to @release_news`);
+  await command(`/sub ${repo} pr`, { chat: -10099 });
+  sent = [];
+  const release = { draft: true, tag_name: 'v2', body: '## Changes\n\n- **Fix** startup\n- Read [notes](https://example.com/notes)' };
+  for (const action of ['created', 'edited', 'deleted']) {
+    assert.equal((await github('release', { action, release })).status, 200);
+  }
+  assert.equal((await github('pull_request', { action: 'opened', pull_request: { number: 2, draft: true } })).status, 200);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ?').bind(repo).first()).n, 0);
+  assert.equal(sent.length, 0);
+  await github('release', { action: 'published', release: { ...release, draft: false } });
+  await github('pull_request', { action: 'ready_for_review', pull_request: { number: 2, draft: false, body: '**Ready** for review' } });
+  await settled();
+  assert.equal(sent.length, 2);
+  const channel = sent.find(message => message.chat_id === '-10077');
+  assert.equal(channel.parse_mode, 'MarkdownV2');
+  assert.ok(channel.text.endsWith('*Changes*\n\n• *Fix* startup\n• Read [notes](https://example.com/notes)'));
+  assert.ok(sent.find(message => message.chat_id === '-10099').text.endsWith('*Ready* for review'));
 });
 
 test('large pushes fan out every page, retain topic routing, and deduplicate all pages on replay', async () => {
