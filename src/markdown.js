@@ -1,4 +1,6 @@
 import { Marked } from 'marked';
+import { decodeHTML as decode } from 'entities';
+import { groupHtml } from './html.js';
 
 export const escapeMarkdown = (text) => text.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
 const escapeCode = (text) => text.replace(/[`\\]/g, '\\$&');
@@ -67,19 +69,10 @@ const markdown = new Marked({ gfm: true, extensions: [{
     const summary = /^<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary\s*>\s*/i.exec(body);
     if (summary) body = body.slice(summary[0].length);
     return { type: 'details', raw: source.slice(0, end),
-      summary: this.lexer.inlineTokens(summary ? summary[1].replace(/<[^>]*>/g, '').trim() || 'Details' : 'Details'),
+      summary: this.lexer.inlineTokens(summary ? summary[1].trim() || 'Details' : 'Details'),
       tokens: this.lexer.blockTokens(body), open: /\sopen(?:\s|=|>)/i.test(opening[0]) };
   },
 }] });
-
-function decode(value) {
-  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-  return value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
-    if (entity[0] !== '#') return named[entity.toLowerCase()];
-    const code = entity[1].toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-    return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : '�';
-  });
-}
 
 function linkTarget(value, base) {
   try {
@@ -89,10 +82,112 @@ function linkTarget(value, base) {
   } catch { return ''; }
 }
 
-// Parse GitHub Markdown once, then keep text and entity delimiters separate.
+const hiddenTags = new Set(['script', 'style', 'head', 'template', 'iframe', 'object', 'noscript', 'svg', 'math']);
+const blockTags = new Set(['address', 'article', 'aside', 'div', 'section', 'main', 'header', 'footer', 'nav',
+  'p', 'figure', 'figcaption', 'center', 'dl', 'dd']);
+const isBlockToken = token => ['paragraph', 'heading', 'list', 'table', 'blockquote', 'code', 'details'].includes(token.type)
+  || token.type === 'html_element' && (blockTags.has(token.name) || /^h[1-6]$/.test(token.name)
+    || ['ul', 'ol', 'table', 'blockquote', 'details', 'pre', 'br', 'hr', 'dt', 'li'].includes(token.name));
+const htmlStyles = { b: '*', strong: '*', i: '_', em: '_', s: '~', strike: '~', del: '~', u: '__', ins: '__', 'tg-spoiler': '||' };
+const styledContext = context => ['*', '_', '~', '__', '||'].some(style => context[style]);
+const inlineTokens = source => markdown.Lexer.lexInline(source, markdown.defaults);
+const block = children => ({ ...wrap(children), block: true, trimEnd: true });
+
+// Used for code and the depth limit. Walk iteratively so malformed/deep HTML
+// cannot exhaust the stack. Markdown delimiters inside HTML code remain literal.
+function rawText(tokens) {
+  let result = '';
+  const pending = [...tokens].reverse();
+  while (pending.length) {
+    const token = pending.pop();
+    if (token.type === 'html_element') {
+      if (!hiddenTags.has(token.name)) pending.push(...[...token.tokens].reverse());
+    } else result += decode(token.raw ?? token.text ?? '');
+  }
+  return result;
+}
+
+function quoteNodes(content, context, expandable = false, keepOpen = false) {
+  if (context.quote || context.link || styledContext(context)) return content;
+  return [{ ...wrap(content), quote: true, expandable, keepOpen, trimEnd: true }, text('\n\n')];
+}
+
+function htmlNodes(token, base, context) {
+  const { name, attrs, tokens } = token;
+  if (hiddenTags.has(name) || Object.hasOwn(attrs, 'hidden')) return [];
+  const children = (extra = {}, entries = tokens) => nodes(entries, base, { ...context, htmlBlock: false, ...extra });
+  const style = Object.hasOwn(htmlStyles, name) ? htmlStyles[name]
+    : name === 'span' && decode(attrs.class || '').split(/\s+/).includes('tg-spoiler') ? '||' : '';
+  if (style) return context[style] ? children() : [wrap(children({ [style]: true }), style, style)];
+  if (/^h[1-6]$/.test(name) || name === 'dt' || name === 'summary') {
+    return [block(context['*'] ? children() : [wrap(children({ '*': true }), '*', '*')])];
+  }
+  if (name === 'br') return [text('\n')];
+  if (name === 'hr') return [block([text('────')])];
+  if (name === 'a' || name === 'img' || name === 'video' || name === 'audio') {
+    const source = attrs[name === 'a' ? 'href' : 'src'];
+    const target = source && !context.link && linkTarget(source, base);
+    const label = name === 'a' ? children({ link: true })
+      : [text(decode(attrs.alt || attrs.title || ({ img: 'Image', video: 'Video', audio: 'Audio' })[name]))];
+    return target ? [wrap(label, '[', `](${target})`)] : label;
+  }
+  if (name === 'code' || name === 'pre' || name === 'kbd' || name === 'samp' || name === 'tt') {
+    const value = rawText(tokens);
+    if (styledContext(context) || context.link) return [text(value), ...(name === 'pre' ? [text('\n\n')] : [])];
+    if (name !== 'pre') return [wrap([text(value, escapeCode)], '`', '`')];
+    const code = tokens.find(child => child.name === 'code');
+    const language = /(?:^|\s)language-([A-Za-z0-9_+-]{1,30})(?:\s|$)/.exec(decode(code?.attrs.class || attrs.class || ''))?.[1] || '';
+    return [block([wrap([text(value.replace(/^\n/, '').replace(/\n$/, ''), escapeCode)], `\`\`\`${language}\n`, '\n```')])];
+  }
+  if (name === 'blockquote') {
+    return quoteNodes(children({ quote: true, htmlBlock: true }), context, Object.hasOwn(attrs, 'expandable'));
+  }
+  if (name === 'details') {
+    const summary = tokens.find(child => child.name === 'summary');
+    const heading = summary ? children({ '*': true, quote: true }, summary.tokens) : [text('Details')];
+    return quoteNodes([wrap(heading, '*', '*'), text('\n'),
+      ...children({ quote: true, htmlBlock: true }, tokens.filter(child => child !== summary))],
+    context, !Object.hasOwn(attrs, 'open'), Object.hasOwn(attrs, 'open'));
+  }
+  if (name === 'ul' || name === 'ol') {
+    let number = /^-?\d{1,6}$/.test(attrs.start || '') ? Number(attrs.start) : 1;
+    const items = tokens.filter(child => child.name === 'li');
+    return [...(context.indent ? [text('\n')] : []), ...items.flatMap(item => {
+      if (/^-?\d{1,6}$/.test(item.attrs.value || '')) number = Number(item.attrs.value);
+      const checkbox = item.tokens.find(child => child.name === 'input' && child.attrs.type?.toLowerCase() === 'checkbox');
+      const marker = checkbox ? Object.hasOwn(checkbox.attrs, 'checked') ? '☑' : '☐' : name === 'ol' ? `${number++}.` : '•';
+      const content = children({ indent: (context.indent || 0) + 1, htmlBlock: true, htmlTask: true }, item.tokens);
+      if (content[0] && 'value' in content[0]) content[0].value = content[0].value.trimStart();
+      return [text(`${'  '.repeat(context.indent || 0)}${marker} `),
+        { ...wrap(content), trimEnd: true }, text('\n')];
+    }), text('\n')];
+  }
+  if (name === 'input') return attrs.type?.toLowerCase() === 'checkbox' && !context.htmlTask
+    ? [text(Object.hasOwn(attrs, 'checked') ? '☑ ' : '☐ ')] : [];
+  if (name === 'table') {
+    const rows = tokens.flatMap(child => ['thead', 'tbody', 'tfoot'].includes(child.name) ? child.tokens : [child]).filter(child => child.name === 'tr');
+    const caption = tokens.find(child => child.name === 'caption');
+    return [block([...(caption ? [wrap(children({ '*': true }, caption.tokens), '*', '*'), text('\n')] : []),
+      ...rows.flatMap(row => [
+        ...row.tokens.filter(cell => ['th', 'td'].includes(cell.name)).flatMap((cell, index) => [
+          ...(index ? [text(' | ')] : []),
+          ...(cell.name === 'th' && !context['*'] ? [wrap(children({ '*': true }, cell.tokens), '*', '*')] : children({}, cell.tokens)),
+        ]), text('\n'),
+      ]),
+    ])];
+  }
+  if (blockTags.has(name) || name === 'li') return [block(children({ htmlBlock: true }))];
+  // Layout, font-size and unknown tags have no Telegram text equivalent.
+  return children();
+}
+
+// Parse GitHub Markdown and HTML, keeping text and entity delimiters separate.
 // Truncation below only shortens text; URLs and closing delimiters stay intact.
 function nodes(tokens, base, context = {}) {
-  return tokens.flatMap(token => {
+  context = { ...context, depth: (context.depth || 0) + 1 };
+  tokens = groupHtml(tokens);
+  if (context.depth > 60) return [text(rawText(tokens))];
+  return tokens.flatMap((token, index) => {
     const children = (extra = {}) => nodes(token.tokens || [], base, { ...context, ...extra });
     const styled = (style) => context[style] ? children() : [wrap(children({ [style]: true }), style, style)];
     switch (token.type) {
@@ -108,15 +203,22 @@ function nodes(tokens, base, context = {}) {
       case 'checkbox': return []; // The list item supplies its own task marker.
       case 'text': return token.tokens ? children() : [text(decode(token.text))];
       case 'escape': return [text(token.text)];
-      case 'html': // Raw HTML is never interpreted as Telegram markup.
-        if (/^<!--/.test(token.text)) return [];
-        if (/^<br\s*\/?\s*>$/i.test(token.text)) return [text('\n')];
-        return [text(token.text)];
+      case 'html_element': return htmlNodes(token, base, context);
+      case 'html_text': {
+        if (!token.text.trim() && context.htmlBlock) {
+          const previous = tokens[index - 1];
+          const next = tokens[index + 1];
+          return previous && next && !isBlockToken(previous) && !isBlockToken(next) ? [text(' ')] : [];
+        }
+        const parsed = context.htmlBlock ? markdown.lexer(token.text) : inlineTokens(token.text);
+        // A text run interrupted by <a>, <b> or <br> is still one paragraph.
+        return nodes(parsed.length === 1 && parsed[0].type === 'paragraph' ? parsed[0].tokens : parsed, base, context);
+      }
       case 'codespan':
       case 'code': {
         const block = token.type === 'code';
         // Code can be inside quotes, but not emphasis or a link label.
-        if (context['*'] || context['_'] || context['~'] || context.link) {
+        if (styledContext(context) || context.link) {
           return [text(token.text), ...(block ? [text('\n\n')] : [])];
         }
         const language = /^[A-Za-z0-9_+-]{1,30}$/.test(token.lang || '') ? token.lang : '';
@@ -131,13 +233,13 @@ function nodes(tokens, base, context = {}) {
       }
       case 'blockquote': {
         const content = children({ quote: true });
-        return context.quote ? content : [{ ...wrap(content), quote: true, trimEnd: true }, text('\n\n')];
+        return quoteNodes(content, context);
       }
       case 'details': {
         const content = [wrap(nodes(token.summary, base, { ...context, quote: true, '*': true }), '*', '*'),
           text('\n'), ...children({ quote: true })];
         // Telegram quotations cannot nest; retain inner headings and prose.
-        return context.quote ? content : [{ ...wrap(content), quote: true, expandable: !token.open, keepOpen: token.open, trimEnd: true }, text('\n\n')];
+        return quoteNodes(content, context, !token.open, token.open);
       }
       case 'list':
         return [...(context.indent ? [text('\n')] : []), ...token.items.flatMap((item, index) => [
@@ -158,11 +260,19 @@ function nodes(tokens, base, context = {}) {
   });
 }
 
-const plainText = entries => entries.map(node => 'value' in node ? node.value : plainText(node.children)).join('');
+const plainText = entries => entries.map(node => 'value' in node ? node.value
+  : plainText(node.children) + (node.block ? '\n\n' : '')).join('');
 const flattenQuotes = entries => entries.flatMap(node => node.quote ? flattenQuotes(node.children)
   : node.children ? [{ ...node, children: flattenQuotes(node.children) }] : [node]);
 
 function compactBlocks(tree) {
+  const liftDetails = entries => entries.flatMap(node => {
+    if (!node.block) return [node];
+    const children = liftDetails(node.children);
+    return children.some(child => child.quote && (child.expandable || child.keepOpen))
+      ? [...children, text('\n\n')] : [{ ...node, children }];
+  });
+  tree = liftDetails(tree);
   const result = [];
   let group = [];
   const flush = () => {
@@ -199,7 +309,16 @@ function render(tree, limit) {
         if (!content) part = '';
         else if (node.quote) {
           part = quoteMarkdown(content, Boolean(node.expandable));
-        } else part = node.open + content + node.close;
+        } else {
+          // Empty bold separates adjacent underscore delimiters, including an
+          // italic span nested inside an HTML underline (and vice versa).
+          const join = (a, b) => a.endsWith('_') && b.startsWith('_') ? a + '**' + b : a + b;
+          part = join(join(node.open, content), node.close);
+        }
+      }
+      if (node.block && part) {
+        if (result.trim()) result = result.trimEnd() + '\n\n';
+        part += '\n\n';
       }
       // Adjacent italic entities must not accidentally become an underline.
       if (result.endsWith('_') && part.startsWith('_')) result += '**';

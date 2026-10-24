@@ -228,8 +228,8 @@ test('suppresses draft releases and PR activity, then allows published and ready
   assert.equal(formatEvent('pull_request', payload({ action: 'ready_for_review', pull_request: { draft: false, number: 1 } })).category, 'pr');
 });
 
-test('all prose bodies render GitHub Markdown, with literal metadata and commit summaries', () => {
-  const body = '## Changes\n\n**Fixed** startup with `--safe` and [details](https://example.com/docs).';
+test('all prose bodies render mixed HTML and Markdown, with literal metadata and commit summaries', () => {
+  const body = '<h2>Changes</h2>\n\n**Fixed** startup with <code>--safe</code> and <a href="https://example.com/docs">details</a>.';
   const cases = [
     ['release', { release: { body } }], ['issues', { issue: { body } }],
     ['pull_request', { pull_request: { body } }],

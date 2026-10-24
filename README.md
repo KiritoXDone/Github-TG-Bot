@@ -20,10 +20,11 @@
 - Push 收到多少个 Commit 就展示多少个；超过 5 条或可见文字超过 600 字符时折叠列表，超长自动分页并按顺序投递，限流后从未发送的页继续。哈希及作者链接在折叠块内仍可点击。
 - 通知使用 GitHubBot 风格的 MarkdownV2 排版：首行是事件和对象链接，作者另起一行；Push 用提交数量链接到 Compare，每条提交显示短哈希、摘要和作者，作者可点击跳转 GitHub 主页（需事件提供关联账号）。Release、Issue、PR、评论、Review 正文渲染 Markdown 的标题、粗斜体、删除线、列表、引用、链接和代码，截断时保留完整格式和链接。
 - GitHub `<details><summary>…</summary>…</details>` 转为 Telegram 可展开引用块，summary 显示为粗体标题，内部正文继续解析 Markdown；带 `open` 时保持展开，嵌套折叠内容展平。
+- 正文支持 HTML 与 Markdown 混写：粗斜体、下划线、删除线、剧透、标题、段落、链接、列表、任务列表、引用和代码转为 Telegram 格式；HTML 表格转文字行，图片转说明链接。未知排版标签保留内部文字，注释、脚本、样式及隐藏内容省略。完整映射见 [文本模板](docs/message-templates.md#html-正文转换)。
 - Release 标题与版本号合并为一个链接；各类状态使用简洁英文描述，如 `New release`、`Merged pull request`、`Workflow succeeded`。Issue、PR、评论、Push 参考公开样例，其余事件沿用同一风格；当前不支持回复通知向 GitHub 发布评论。
 - 完整文案与通知格式见 [当前消息文本模板](docs/message-templates.md)。
 - `/status` 检查投递状态，`/retry` 重试失败消息。
-- 使用 Marked 解析 GitHub Markdown；测试使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
+- 使用 Marked 解析 GitHub Markdown、htmlparser2 解析 HTML；测试先打包 Worker，再使用真实 workerd 和 D1 本地模拟器，Telegram 出站请求由测试拦截。
 
 ```mermaid
 flowchart LR

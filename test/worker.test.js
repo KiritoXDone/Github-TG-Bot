@@ -1,7 +1,7 @@
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { createHmac, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { formatEvent } from '../src/format.js';
@@ -23,13 +23,9 @@ const bindings = {
 };
 
 before(async () => {
+  const bundled = await build({ entryPoints: ['test/worker.js'], bundle: true, write: false, format: 'esm', target: 'es2022' });
   mf = new Miniflare(convertV4MiniflareOptions({
-    modules: [
-      ...['test/worker.js', ...['index', 'bot', 'delivery', 'format', 'markdown', 'releases', 'security', 'storage', 'targets'].map((name) => `src/${name}.js`)]
-        .map((path) => ({ type: 'ESModule', path })),
-      // Unbundled workerd resolves the bare import relative to src/markdown.js.
-      { type: 'ESModule', path: 'src/marked', contents: await readFile(fileURLToPath(import.meta.resolve('marked')), 'utf8') },
-    ],
+    modules: [{ type: 'ESModule', path: 'test/worker.js', contents: bundled.outputFiles[0].text }],
     compatibilityDate: '2026-10-01', d1Databases: ['DB'], bindings,
     outboundService: async (request) => {
       const url = new URL(request.url);
@@ -178,7 +174,7 @@ test('draft webhooks are acknowledged without queuing; publication renders Markd
   await command(`/sub ${repo} release --to @release_news`);
   await command(`/sub ${repo} pr`, { chat: -10099 });
   sent = [];
-  const release = { draft: true, tag_name: 'v2', body: '## Changes\n\n- **Fix** startup\n- Read [notes](https://example.com/notes)\n\n<details><summary>English</summary>\n\n- **Fix** startup\n- Improve loading\n\n</details>' };
+  const release = { draft: true, tag_name: 'v2', body: '<h2>Changes</h2>\n\n- <strong>Fix</strong> startup\n- Read [notes](https://example.com/notes)\n\n<details><summary>English</summary>\n\n- **Fix** startup\n- Improve loading\n\n</details>' };
   for (const action of ['created', 'edited', 'deleted']) {
     assert.equal((await github('release', { action, release })).status, 200);
   }
@@ -186,7 +182,7 @@ test('draft webhooks are acknowledged without queuing; publication renders Markd
   assert.equal((await db.prepare('SELECT count(*) AS n FROM outbox WHERE repo = ?').bind(repo).first()).n, 0);
   assert.equal(sent.length, 0);
   await github('release', { action: 'published', release: { ...release, draft: false } });
-  await github('pull_request', { action: 'ready_for_review', pull_request: { number: 2, draft: false, body: '**Ready** for review' } });
+  await github('pull_request', { action: 'ready_for_review', pull_request: { number: 2, draft: false, body: '<b>Ready</b> for review' } });
   await settled();
   assert.equal(sent.length, 2);
   const channel = sent.find(message => message.chat_id === '-10077');

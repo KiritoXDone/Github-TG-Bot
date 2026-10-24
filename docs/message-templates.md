@@ -21,7 +21,7 @@ by [@KiritoXDone](https://github.com/KiritoXDone)
 - 普通 Push 在每条提交后显示提交作者。其他事件第二行为 `by @操作人`，PR 使用样例中的 `by: @操作人`。操作人链接到 GitHub 主页；Commit 作者保留显示名称，并链接到事件提供的作者 GitHub 账号，缺少有效账号时保留纯文本。
 - 事件使用英文描述，例如 `New issue`、`Merged pull request`、`New release`、`Workflow succeeded`。
 - Release、Issue、PR、评论和 Review 正文把 GitHub Markdown 转为 Telegram MarkdownV2：[Telegram 格式说明](https://core.telegram.org/bots/api#markdownv2-style)。标题显示为粗体，支持粗斜体、删除线、行内代码、代码块、行内链接、列表、任务列表和引用。标题字段与 Commit 摘要保持字面文本。
-- 表格转为可读文本行；图片显示为图片文字链接；`<details>` 转为可展开引用块，`<summary>` 显示为粗体标题，内部继续解析 Markdown。带 `open` 的 details 使用普通展开引用块；嵌套 details 展平，代码示例中的标签保持字面文本。HTML 注释省略，其他原始 HTML 按文字显示（`<br>` 转换为换行）。Telegram 不允许的嵌套（如粗体里的代码）保留文字，嵌套引用展平。只允许 HTTP(S) 正文链接，不携带账号密码。
+- HTML 与 Markdown 正文统一转换，具体标签见下表。表格转为可读文本行，图片显示为说明链接；`<details>` 转为可展开引用块，`<summary>` 显示为粗体标题，内部继续解析 Markdown。带 `open` 的 details 使用普通展开引用块；嵌套 details 展平，代码示例中的标签保持字面文本。Telegram 不允许的嵌套（如粗体里的代码）保留文字，嵌套引用展平。只允许 HTTP(S) 正文链接，不携带账号密码。
 - 草稿 Release、草稿 PR 及转为草稿的事件不推送；发布或 `ready_for_review` 后恢复通知，预发布正常推送。Review / 评论事件携带 `pull_request.draft=true` 时同样跳过；普通 `issue_comment` 不提供 PR 草稿状态，不额外查询 GitHub。
 - 对象标题、提交数量、哈希、作者使用行内链接，模板不额外附加原文 URL。正文中用户自行写入的 URL 仍作为原文保留。
 - 当前 Bot 没有回复回写 GitHub 的功能，因此不显示官方样例中的回复评论提示。
@@ -30,6 +30,37 @@ by [@KiritoXDone](https://github.com/KiritoXDone)
 - 下方代码块使用 Telegram MarkdownV2 的形式：`*文字*` 表示加粗，`[文字](链接)` 表示行内链接。`{变量}` 是占位符；实际发送时由程序代入并转义。
 - 为便于审阅，示例省略运行时的特殊字符转义，不能直接当作 Telegram API 请求体发送。
 - Bot 管理命令回复保持纯文本，见第 5 节。
+
+### HTML 正文转换
+
+适用于 Issue、PR、Release、评论和 Review 正文，支持与 Markdown 混写。HTML 属性不直接传给 Telegram；标题字段和 Commit 摘要仍作为字面文本。
+
+| HTML | Telegram 显示 |
+| --- | --- |
+| `<b>`、`<strong>` | 粗体 |
+| `<i>`、`<em>` | 斜体 |
+| `<u>`、`<ins>` | 下划线 |
+| `<s>`、`<strike>`、`<del>` | 删除线 |
+| `<tg-spoiler>`、`<span class="tg-spoiler">` | 点击显示的剧透文字 |
+| `<h1>` 至 `<h6>` | 粗体标题 |
+| `<p>`、`<div>`、`<section>` 等段落容器 | 分段文字；忽略颜色、字号、对齐等样式 |
+| `<br>`、`<hr>` | 换行、分隔线 |
+| `<a href="…">` | 可点击文字链接，兼容相对地址和属性内的实体 |
+| `<img src="…" alt="…">` | 图片说明链接，不另外发送图片 |
+| `<video src="…">`、`<audio src="…">` | 媒体文字链接 |
+| `<ul>`、`<ol>`、`<li>` | 列表，保留嵌套缩进和有序列表起始编号 |
+| `<input type="checkbox">` | `☑` 或 `☐` 任务标记 |
+| `<dl>`、`<dt>`、`<dd>` | 加粗术语及其说明 |
+| `<code>`、`<kbd>`、`<samp>`、`<tt>` | 等宽行内文字 |
+| `<pre>`、`<pre><code class="language-js">` | 代码块，保留语言标识和换行 |
+| `<blockquote>` | 引用；有 `expandable` 时可折叠 |
+| `<details>`、`<summary>` | 可展开引用块和粗体标题；`open` 保持展开 |
+| `<table>`、`<tr>`、`<th>`、`<td>` 等 | 按行展示，单元格用分隔符连接，表头加粗 |
+| `&copy;`、`&rarr;`、数字实体等 | 还原对应字符，转义后的标签仍作为字面文字 |
+| `<sup>`、`<sub>`、普通 `<span>` 和其他未知标签 | 保留内部文字，不显示标签或模拟浏览器样式 |
+| 注释、`<script>`、`<style>`、`<head>`、`<template>`、`<iframe>`、`<object>`、`<noscript>`、`<svg>`、`<math>`、带 `hidden` 的元素 | 省略内容 |
+
+标签嵌套或未闭合时尽量保留可读内容，输出格式仍闭合。长正文继续自动折叠并按字符额度截断，完整内容通过通知首行链接查看。
 
 ### GitHub 折叠内容
 

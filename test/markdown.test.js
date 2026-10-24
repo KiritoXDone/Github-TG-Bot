@@ -23,10 +23,10 @@ test('renders lists, task lists, quotes and table rows without raw GitHub delimi
   assert.equal(render('- parent\n  - child\n- sibling'), '• parent\n  • child\n• sibling');
 });
 
-test('decodes entities, ignores HTML comments, and safely preserves unsupported markup', () => {
+test('decodes entities, ignores HTML comments and scripts, and preserves literal malformed Markdown', () => {
   assert.equal(render('A &amp; B &#x1f680; &#42;literal&#42;'), 'A & B 🚀 \\*literal\\*');
   assert.equal(render('<!-- hidden template -->\n\nVisible<br>next'), 'Visible\nnext');
-  assert.equal(render('<script>alert(1)</script>'), '<script\\>alert\\(1\\)</script\\>');
+  assert.equal(render('<script>alert(1)</script>'), '');
   assert.equal(render('unclosed **bold [link]('), 'unclosed \\*\\*bold \\[link\\]\\(');
 });
 
@@ -129,5 +129,90 @@ test('compact truncation includes all quote markers in its budget and keeps Unic
     assert.ok(result.length <= budget);
     assert.ok(result.isWellFormed());
     assert.ok(result === '…' || result.endsWith('…||'));
+  }
+});
+
+test('renders nested HTML emphasis, underline and spoilers alongside Markdown', () => {
+  assert.equal(render('A <b>bold **MD**</b> <strong>strong</strong> <i>italic</i> <em>em</em> <del>old</del> <s>s</s> <strike>strike</strike>'),
+    'A *bold MD* *strong* _italic_ _em_ ~old~ ~s~ ~strike~');
+  assert.equal(render('<u><em>both</em></u> <em><u>inverse</u></em> <ins>new</ins>'),
+    '__**_both_**__ _**__inverse__**_ __new__');
+  assert.equal(render('<span class="tg-spoiler">secret</span> <tg-spoiler>hidden</tg-spoiler>'), '||secret|| ||hidden||');
+  assert.equal(render('<b><code>x_y</code></b> <u>`x_y`</u>'), '*x\\_y* __x\\_y__');
+  assert.equal(render('<sup>2</sup> <sub>x</sub> <span style="color: red">red</span> <custom>**content**</custom>'), '2 x red *content*');
+});
+
+test('renders HTML paragraphs, headings, containers and definition lists without splitting inline links', () => {
+  assert.equal(render('<div>\n<h2>Title</h2>\n<p>Hello <a href="issues/1"><strong>link</strong></a></p><p>Next<br/>line</p></div>'),
+    '*Title*\n\nHello [*link*](https://github.com/owner/repo/issues/1)\n\nNext\nline');
+  assert.equal(render('<div>\n\n**bold**\n\n- One\n- Two\n\n</div>'), '*bold*\n\n• One\n• Two');
+  assert.equal(render('<dl><dt>Term</dt><dd>Definition</dd></dl><hr><p>End</p>'), '*Term*\n\nDefinition\n\n────\n\nEnd');
+  assert.equal(render('<p><b>One</b> <i>Two</i> <a href="https://example.com">Three</a></p>'), '*One* _Two_ [Three](https://example.com/)');
+});
+
+test('renders HTML ordered, nested and task lists, including omitted closing li tags', () => {
+  assert.equal(render('<ul><li>One<li>Two<ul><li>Nested</li></ul><li>Three</ul>'), '• One\n• Two\n  • Nested\n• Three');
+  assert.equal(render('<ol start="3"><li>Three</li><li value="9">Nine</li><li>Ten</li></ol>'), '3\\. Three\n9\\. Nine\n10\\. Ten');
+  assert.equal(render('<ul><li><input type="checkbox" checked disabled> Done</li><li><input type="checkbox"> Pending</li></ul>'), '☑ Done\n☐ Pending');
+});
+
+test('renders HTML tables and image links while enforcing safe destinations and entity decoding', () => {
+  assert.equal(render('<table><caption>Builds</caption><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>App</td><td><a href="https://example.com">OK</a></td></tr></tbody></table>'),
+    '*Builds*\n*Name* \\| *Status*\nApp \\| [OK](https://example.com/)');
+  assert.equal(render('<img src="https://example.com/a.png" alt="A &amp; B"> <a name="anchor">Text</a>'), '[A & B](https://example.com/a.png) Text');
+  assert.equal(render('<a href="https://example.com/?a=1&amp;b=2">Read &copy; &rarr; &nbsp; &#x1f680;</a>'), '[Read © →   🚀](https://example.com/?a=1&b=2)');
+  for (const target of ['javascript:alert(1)', 'java&#x73;cript:alert(1)', 'data:text/html,evil', 'https://name:password@example.com']) {
+    assert.equal(render(`<a href="${target}">label</a> <img src="${target}" alt="Preview">`), 'label Preview');
+  }
+  assert.equal(render('<a href="https://example.com"><img src="https://example.com/x.png" alt="Preview"></a>'), '[Preview](https://example.com/)');
+  assert.equal(render('&lt;b&gt;literal&lt;/b&gt; &ast;literal&ast;'), '<b\\>literal</b\\> \\*literal\\*');
+});
+
+test('preserves HTML code and shields code examples in mixed HTML and Markdown', () => {
+  assert.equal(render('<pre><code class="language-js">const x = &lt;tag&gt;;\n// `code`\n</code></pre>'), '```js\nconst x = <tag>;\n// \\`code\\`\n```');
+  assert.equal(render('<code>**literal** &lt;b&gt;</code> and `<b>literal</b>`'), '`**literal** <b>` and `<b>literal</b>`');
+  assert.equal(render('<kbd>Ctrl</kbd> + <samp>result</samp>'), '`Ctrl` \\+ `result`');
+  for (const fence of ['```', '~~~']) {
+    assert.equal(render(`<div>\n${fence}html\n<b>literal</b>\n${fence}\n</div>`), '```html\n<b>literal</b>\n```');
+  }
+  assert.equal(render('<div>Use `<b>example</b>` then **bold**.</div>'), 'Use `<b>example</b>` then *bold*\\.');
+  assert.equal(render('<div title="`quoted` > value">Text</div>'), 'Text');
+  assert.equal(render('<div>Read <https://example.com> and &lt;b&gt;literal&lt;/b&gt;</div>'), 'Read [https://example\\.com](https://example.com/) and <b\\>literal</b\\>');
+});
+
+test('keeps HTML quotations and details expandable without illegal nesting', () => {
+  assert.equal(render('<blockquote><p>First</p><blockquote><b>Inner</b></blockquote></blockquote>'), '>First\n>\n>*Inner*');
+  const source = '<div><details><summary><b>English</b> <a href="https://example.com">docs</a></summary>\n\n- **Fix** loading\n- Improve\n\n</details></div>';
+  assert.equal(render(source), '**>*English [docs](https://example.com/)*\n>• *Fix* loading\n>• Improve||');
+  assert.equal(render('<blockquote expandable>Text</blockquote>'), '**>Text||');
+  assert.equal(render('<b><blockquote>Text</blockquote></b>'), '*Text*');
+  const open = '<div><details open><summary>English</summary>' + 'x'.repeat(800) + '</details></div>';
+  assert.ok(render(open, { compact: true }).startsWith('>*English*\n>'));
+  assert.ok(!render(open, { compact: true }).includes('||'));
+});
+
+test('normalizes malformed HTML, omits non-content elements and bounds deep nesting', () => {
+  assert.equal(render('<b>broken <i>nest</b> tail</i>'), '*broken _nest_* tail');
+  assert.equal(render('<div><script>**secret**</script><style>bad</style><p hidden>hidden</p><iframe src="https://example.com">frame</iframe><template>template</template>Visible</div>'), 'Visible');
+  for (const source of ['<b>'.repeat(1500) + 'text' + '</b>'.repeat(1500), '<div>'.repeat(2000) + 'text', '<b>unclosed', '<!-- unfinished']) {
+    const result = render(source, { compact: true, budget: 100 });
+    assert.ok(result.length <= 100);
+    assert.ok(result.isWellFormed());
+  }
+});
+
+test('HTML previews collapse and truncate with balanced formatting, code and link targets', () => {
+  const source = '<div><h2>Changes</h2><p><u>' + '🧑'.repeat(2000) + '</u></p><a href="https://example.com">Read more</a></div>';
+  for (const budget of [1, 15, 50, 3900]) {
+    const result = render(source, { compact: true, budget });
+    assert.ok(result.length <= budget);
+    assert.ok(result.isWellFormed());
+    assert.ok(result === '…' || result.endsWith('…||'));
+    assert.doesNotMatch(result, /<\/?(?:div|h2|p|u|a)[\s>]/);
+  }
+  assert.equal(render('<b>' + 'x'.repeat(200) + '</b>', { maxText: 5 }), '*xxxxx*…');
+  for (const count of [8, 9]) {
+    const paragraphs = Array.from({ length: count }, (_, i) => `<p>Line ${i}</p>`).join('');
+    assert.equal(render(paragraphs, { compact: true }).startsWith('**>'), count > 8);
   }
 });

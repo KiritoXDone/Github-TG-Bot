@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "GitHub repository notifications for Telegram, built for Cloudflare Workers and D1",
-  "engines": { "node": ">=22.18.0" },
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "test": "node --test test/*.test.js",
@@ -15,10 +17,13 @@
     "telegram:setup": "node --env-file=.dev.vars scripts/telegram-setup.js"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
     "miniflare": "5.20261019.2-beta",
     "wrangler": "4.152.0"
   },
   "dependencies": {
+    "entities": "8.0.0",
+    "htmlparser2": "12.0.0",
     "marked": "18.1.1"
   }
 }
