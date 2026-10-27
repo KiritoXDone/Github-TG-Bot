@@ -1,7 +1,7 @@
 import { handleTelegram } from './bot.js';
 import { flushOutbox } from './delivery.js';
 import { formatEvent } from './format.js';
-import { releaseSnapshot, rememberRelease } from './releases.js';
+import { initialEditHasContentChange, releaseSnapshot, rememberRelease } from './releases.js';
 import { configured, equalSecret, HttpError, ids, parseBody, readBody, validGitHubSignature } from './security.js';
 import { prune, receiptStatements } from './storage.js';
 
@@ -57,7 +57,8 @@ export default {
           if (publication) statements.push(...receiptStatements(env.DB, publication, token, now));
           const snapshot = event === 'release' && ['published', 'edited'].includes(payload.action)
             ? await releaseSnapshot(payload.release) : null;
-          if (snapshot) statements.push(rememberRelease(env.DB, notification.repo, snapshot, id, publication, token, now));
+          if (snapshot) statements.push(rememberRelease(env.DB, notification.repo, snapshot, id, publication, token, now,
+            payload.action !== 'edited' || initialEditHasContentChange(payload.release, payload.changes)));
           const edit = payload.action === 'edited' ? snapshot?.id ?? null : null;
           // All pages and recipients share one transaction and receipt. json_each
           // keeps large pushes within D1's query/parameter limits without dropping pages.
