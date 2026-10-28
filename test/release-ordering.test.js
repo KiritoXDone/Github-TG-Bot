@@ -29,7 +29,7 @@ before(async () => {
     },
   }));
   db = await mf.getD1Database('DB');
-  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql', '0005_release_states.sql']) {
+  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql', '0005_release_states.sql', '0006_activity_states.sql']) {
     for (const sql of (await readFile(`migrations/${file}`, 'utf8')).split(';').filter(s => s.trim())) {
       await db.prepare(sql).run();
     }

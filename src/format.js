@@ -176,6 +176,7 @@ function pushMessages(header, commits, repoUrl) {
 export function formatEvent(event, p) {
   const repo = repoName(p.repository?.full_name);
   if (!repo) return null;
+  if (['issues', 'pull_request'].includes(event) && ['labeled', 'unlabeled'].includes(p.action)) return null;
   if (event === 'release' && p.release?.draft) return null;
   // GitHub emits overlapping release actions for one publication. published
   // covers stable releases and pre-releases, including publication from drafts.

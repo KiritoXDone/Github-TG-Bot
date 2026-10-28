@@ -100,10 +100,10 @@ by: [@{操作人}]({操作人主页})
 | `opened` / `created` | `New {对象}` | Issue 🐛 / PR 🔌 |
 | `closed` | `Closed {对象}` | 见对应事件 |
 | `reopened` | `Reopened {对象}` | 🔄 |
-| `edited` | `Updated {对象}` | ✏️ |
+| `edited` | 内容实际变化时发送 `Updated {对象}` | ✏️ |
 | `deleted` | `Deleted {对象}` | 🗑️ |
 | `assigned` / `unassigned` | `Assigned {对象}` / `Unassigned {对象}` | 👤 |
-| `labeled` / `unlabeled` | `Labeled {对象}` / `Unlabeled {对象}` | 🏷️ |
+| `labeled` / `unlabeled` | 不推送 | — |
 | `locked` / `unlocked` | `Locked {对象}` / `Unlocked {对象}` | 🔒 / 🔓 |
 | `pinned` / `unpinned` | `Pinned {对象}` / `Unpinned {对象}` | 📌 |
 | `milestoned` | `Added milestone to {对象}` | 🎯 |
@@ -111,6 +111,10 @@ by: [@{操作人}]({操作人主页})
 | `transferred` | `Transferred {对象}` | 📦 |
 | `typed` / `untyped` | `Changed type of {对象}` / `Removed type from {对象}` | Issue 🐛 / PR 🔌 |
 | 未映射或缺失 | `Issue updated` / `Pull request updated` | Issue 🐛 / PR 🔌 |
+
+Issue／PR 标签增删始终跳过；编辑按同一对象的完整内容比较，操作人、更新时间、标签和反应数不参与内容指纹。Issue 比较标题和正文，PR 额外比较目标分支；PR `synchronize` 单独比较 head SHA，目标分支自身的新提交不算 PR 新提交。内容与提交分别维护基准和更新时间，避免空编辑吞掉新提交通知，或空同步吞掉正文编辑。评论和 Review 编辑同样按正文去重。真实修改、恢复为旧内容以及关闭／重开／合并／转为待审核／删除／撤销 Review 等状态通知仍保留。
+
+没有内容基准时，`changes` 的修改前值用于识别首次空编辑；空 `changes` 或仅元数据变化只建立基准。缺少 `changes` 的旧负载保留首次编辑通知；缺少有效对象 ID 则退回投递 ID 去重。已有基准时以完整内容为准，包括预览截断以外的差异。有有效 `updated_at` 时，更旧的编辑不覆盖新基准；没有更新时间的事件按到达顺序比较。同一 Issue／PR 的 `opened`、评论的 `created`、Review 的 `submitted` 按对象身份去重，避免不同投递 ID 重复创建通知；其他状态事件继续使用投递 ID 去重。指纹、回执、全部收件目标在同一个 D1 事务中提交，30 天无活动的基准会清理。
 
 ## 3. 事件通知模板
 

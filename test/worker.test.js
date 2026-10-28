@@ -50,14 +50,14 @@ before(async () => {
     },
   }));
   db = await mf.getD1Database('DB');
-  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql', '0005_release_states.sql']) {
+  for (const file of ['0001_init.sql', '0002_destinations.sql', '0003_message_format.sql', '0004_message_parts.sql', '0005_release_states.sql', '0006_activity_states.sql']) {
     const sql = await readFile(`migrations/${file}`, 'utf8');
     for (const statement of sql.split(';').filter((s) => s.trim())) await db.prepare(statement).run();
   }
 });
 after(async () => { await mf?.dispose(); });
 beforeEach(async () => {
-  await db.batch(['subscriptions', 'receipts', 'outbox', 'destinations', 'release_states'].map((table) => db.prepare(`DELETE FROM ${table}`)));
+  await db.batch(['subscriptions', 'receipts', 'outbox', 'destinations', 'release_states', 'activity_states'].map((table) => db.prepare(`DELETE FROM ${table}`)));
   sent = []; responses = [];
   chats = {
     '-10099': { id: -10099, type: 'supergroup', title: 'Team group', is_forum: true },

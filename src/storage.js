@@ -7,6 +7,7 @@ export async function prune(db, now) {
   await db.batch([
     db.prepare('DELETE FROM receipts WHERE created_at < ?').bind(cutoff),
     db.prepare('DELETE FROM release_states WHERE seen_at < ?').bind(cutoff),
+    db.prepare('DELETE FROM activity_states WHERE seen_at < ?').bind(cutoff),
     db.prepare(`DELETE FROM outbox WHERE status != 'pending' AND finished_at < ?
       AND NOT (status = 'failed' AND EXISTS (SELECT 1 FROM outbox waiting
         WHERE waiting.batch_id = outbox.batch_id AND waiting.status = 'pending'))`).bind(cutoff),

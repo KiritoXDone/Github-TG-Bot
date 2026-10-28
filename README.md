@@ -14,6 +14,7 @@
 - 默认推送 Issues、PR、Commits、Releases；可选评论、Review、Actions、Stars、Forks。跳过草稿 Release 和草稿 PR，正式发布 / 转为待审核后正常通知；预发布仍会通知。
 - GitHub HMAC-SHA256 签名校验、Telegram Webhook Secret、用户及聊天白名单。
 - D1 原子写入事件与消息队列，防止重复 Webhook 导致重复入队。
+- Issue／PR 的 `labeled` / `unlabeled` 不推送。Issue、PR、评论和 Review 的编辑按完整内容去重，更新时间、操作人、标签、反应数变化不会重复推送；PR 同步单独比较 head SHA。真实修改（包括改回旧内容）、新提交、关闭／重开等状态变化仍正常通知；同一对象的创建事件即使使用不同投递 ID 也只通知一次。
 - 新 Release 仅由 `published` 触发，忽略同一次发布附带的 `created` / `released` / `prereleased`；按仓库、Release ID、发布时间去重，避免不同投递 ID 重复通知。编辑时比对名称、版本号、发布说明和预发布状态，内容相同不重复通知；发布伴随的无内容变更 `edited` 即使先到，也只建立基准，不额外推送。真实修改、删除和撤回仍会通知。
 - 消息入库后立即尝试发送；每分钟 Cron 重试限流、超时和临时错误。
 - 支持 Telegram 群话题；正文超过 600 字符或 8 个非空行时使用 MarkdownV2 可展开引用块，短消息直接展示。保留原文超链接和长正文截断保护。
@@ -196,11 +197,12 @@ npm run telegram:setup
 
 `commits` 按一次 Push 汇总所有收到的提交，不限制为前几条；超出消息长度时自动分成带页码的多条消息，哈希和链接保持完整。每个提交展示第一行摘要（最多 180 字符）和作者（最多 80 字符），不使用推送者替代提交作者。不同 Push 分别处理，不按分钟聚合。GitHub 自身的 Push Webhook 最多包含 2048 个提交；本实现展示 Webhook 中实际包含的全部条目，不通过 GitHub API 补取超出部分。[GitHub Push 负载说明](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
 
-订阅按事件分类过滤。草稿和重复的 Release 发布动作会进一步跳过：新版本只接受 `published`，已发布版本的编辑等仍分别通知。未支持的 Webhook 事件返回 200 并忽略。
+订阅按事件分类过滤。Issue／PR 标签增删、没有内容变化的编辑和没有新 head SHA 的 PR 同步会进一步跳过。草稿和重复的 Release 发布动作也会跳过：新版本只接受 `published`，已发布版本的真实编辑等仍分别通知。未支持的 Webhook 事件返回 200 并忽略。
 
 ## 投递行为和限制
 
 - 先在 D1 事务中记录投递 ID、全部分页及收件目标，再返回 200。重复 GitHub delivery ID、Telegram update ID 在 **30 天**内不会重复入队；重放旧事件不会追加后来新订阅的收件人。
+- 内容基准按仓库、事件类型、对象 ID 隔离，只存 SHA-256 指纹；Issue 比较标题／完整正文，PR 另比较目标分支，评论／Review 比较正文。PR 提交指纹与正文指纹分别保存，避免空编辑吞掉尚未投递的新提交。首次编辑有 `changes` 时比较修改前值；无实际差异只建立基准。旧负载缺少对象 ID 时退回投递 ID 去重，缺少 `changes` 时保留首次编辑通知；有可靠 `updated_at` 时忽略更旧的编辑。关闭、重开、合并、转为待审核、删除及 Review 撤销不受内容相同限制。
 - 同一消息使用数据库租约防止并发 Worker/Cron 同时发送。Telegram 不提供 sendMessage 幂等键，因此网络超时发生在 Telegram 已收件之后时，重试仍可能重复，不能保证端到端 exactly-once。
 - 限流遵守 Telegram `retry_after`；网络/5xx 错误指数退避，最多 12 次尝试，之后标记 failed。永久 4xx（如 Bot 被踢出群）直接标记 failed；修复后发送 `/retry`。同一次 Push 发往同一目标/话题的分页按顺序发送，中间一页失败时后续页等待恢复；不同事件的通知顺序不保证严格等同 GitHub 发生顺序。
 - GitHub 请求处理失败返回 503。GitHub 不自动重投所有失败 Webhook，需要在 Recent deliveries 中检查并手动 Redeliver；若事件已入队但 Telegram 失败，使用 `/retry`。[GitHub 重投说明](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)
